@@ -125,6 +125,8 @@ type Outcome struct {
 	Summary   string
 	// Tree is the git tree id after the candidate diff (candidate runs only).
 	Tree string
+	// CandidateSHA256 is the digest of the diff apply-candidate applied.
+	CandidateSHA256 string
 }
 
 // observe returns the outcome of a finished run, (false, nil) while running.
@@ -157,9 +159,12 @@ func observe(object map[string]any) (Outcome, bool, error) {
 			outcome.Summary = value
 		case "tree":
 			outcome.Tree = value
+		case "candidate-sha256":
+			outcome.CandidateSHA256 = value
 		}
 	}
-	if (outcome.Commit != "" && !revision.MatchString(outcome.Commit)) || (outcome.Tree != "" && !revision.MatchString(outcome.Tree)) {
+	if (outcome.Commit != "" && !revision.MatchString(outcome.Commit)) || (outcome.Tree != "" && !revision.MatchString(outcome.Tree)) ||
+		(outcome.CandidateSHA256 != "" && !digestPattern.MatchString(outcome.CandidateSHA256)) {
 		return Outcome{}, true, ErrOutcome
 	}
 	return outcome, true, nil
@@ -168,7 +173,8 @@ func observe(object map[string]any) (Outcome, bool, error) {
 // Cluster creates, reads and cancels PipelineRuns, and creates candidate
 // ConfigMaps owned by them, in the CI namespace.
 type Cluster interface {
-	Create(ctx context.Context, object map[string]any) (string, error)
+	// Create creates a PipelineRun and returns its name and uid.
+	Create(ctx context.Context, object map[string]any) (name, uid string, err error)
 	Get(ctx context.Context, name string) (map[string]any, error)
 	Cancel(ctx context.Context, name string) error
 	CreateConfigMap(ctx context.Context, object map[string]any) error
@@ -176,6 +182,17 @@ type Cluster interface {
 	// Kubernetes deletes it with the run.
 	OwnConfigMap(ctx context.Context, configMap, run, uid string) error
 	DeleteConfigMap(ctx context.Context, name string) error
+	// ListCandidateConfigMaps lists the ConfigMaps labelled as candidates.
+	ListCandidateConfigMaps(ctx context.Context) ([]map[string]any, error)
+}
+
+var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// cleanupTimeout bounds each cleanup call made after ctx may have ended.
+const cleanupTimeout = 30 * time.Second
+
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cleanupTimeout)
 }
 
 var configMaps = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
@@ -184,7 +201,7 @@ var configMaps = schema.GroupVersionResource{Version: "v1", Resource: "configmap
 // digest to apply-candidate.
 func CandidateObject(name string, diff []byte) map[string]any {
 	sum := sha256.Sum256(diff)
-	return map[string]any{"apiVersion": "v1", "kind": "ConfigMap",
+	return map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "immutable": true,
 		"metadata": map[string]any{"name": name, "namespace": Namespace,
 			"labels": map[string]any{"app.kubernetes.io/part-of": "ai-sdlc", "ai-sdlc.io/candidate": "true"}},
 		"data": map[string]any{"candidate.diff": string(diff), "candidate.sha256": hex.EncodeToString(sum[:])}}
@@ -207,12 +224,24 @@ func NewCandidateName(diff []byte) string {
 // only create and read PipelineRuns in the CI namespace.
 type DynamicCluster struct{ Client dynamic.Interface }
 
-func (d DynamicCluster) Create(ctx context.Context, object map[string]any) (string, error) {
+func (d DynamicCluster) Create(ctx context.Context, object map[string]any) (string, string, error) {
 	created, err := d.Client.Resource(pipelineRuns).Namespace(Namespace).Create(ctx, &unstructured.Unstructured{Object: object}, metav1.CreateOptions{})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return created.GetName(), nil
+	return created.GetName(), string(created.GetUID()), nil
+}
+
+func (d DynamicCluster) ListCandidateConfigMaps(ctx context.Context) ([]map[string]any, error) {
+	list, err := d.Client.Resource(configMaps).Namespace(Namespace).List(ctx, metav1.ListOptions{LabelSelector: "ai-sdlc.io/candidate=true", Limit: 500})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(list.Items))
+	for _, item := range list.Items {
+		items = append(items, item.Object)
+	}
+	return items, nil
 }
 
 // Cancel asks Tekton to stop the run (spec.status Cancelled).
@@ -254,6 +283,19 @@ func (d DynamicCluster) Get(ctx context.Context, name string) (map[string]any, e
 // Succeeded is the pipeline's status; the tool's verdict is in the summary
 // (MavenSummary.Passed, NpmSummary.Passed).
 func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, poll time.Duration) (Outcome, error) {
+	return RunReporting(ctx, cluster, r, runtimeClass, poll, nil)
+}
+
+// Created receives the names of a run's objects as soon as each exists: the
+// candidate ConfigMap (pipelineRun still empty), then the PipelineRun.
+type Created func(pipelineRun, configMap string)
+
+// RunReporting is Run that reports created object names, so a journal can
+// record them before the run finishes or fails.
+func RunReporting(ctx context.Context, cluster Cluster, r Request, runtimeClass string, poll time.Duration, created Created) (Outcome, error) {
+	if created == nil {
+		created = func(string, string) {}
+	}
 	if len(r.Candidate) > 0 && r.CandidateConfigMap == "" {
 		r.CandidateConfigMap = NewCandidateName(r.Candidate)
 	}
@@ -261,26 +303,43 @@ func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, p
 	if err != nil {
 		return Outcome{}, err
 	}
-	if len(r.Candidate) > 0 {
+	candidate := len(r.Candidate) > 0
+	deleteCandidate := func() {
+		if candidate {
+			c, cancel := cleanupContext()
+			_ = cluster.DeleteConfigMap(c, r.CandidateConfigMap)
+			cancel()
+		}
+	}
+	if candidate {
 		if err := cluster.CreateConfigMap(ctx, CandidateObject(r.CandidateConfigMap, r.Candidate)); err != nil {
 			return Outcome{}, errors.Join(ErrOutcome, err)
 		}
+		created("", r.CandidateConfigMap)
 	}
-	name, err := cluster.Create(ctx, object)
+	name, uid, err := cluster.Create(ctx, object)
 	if err != nil || name == "" {
-		if len(r.Candidate) > 0 {
-			_ = cluster.DeleteConfigMap(context.Background(), r.CandidateConfigMap)
-		}
+		deleteCandidate()
 		return Outcome{}, errors.Join(ErrOutcome, err)
 	}
-	if len(r.Candidate) > 0 {
-		// Owned by the run, the ConfigMap goes when the run is deleted; if
-		// the owner cannot be set, delete it now rather than leak the diff.
-		created, getErr := cluster.Get(ctx, name)
-		uid, _, _ := unstructured.NestedString(created, "metadata", "uid")
-		if getErr != nil || uid == "" || cluster.OwnConfigMap(ctx, r.CandidateConfigMap, name, uid) != nil {
-			_ = cluster.DeleteConfigMap(context.Background(), r.CandidateConfigMap)
+	created(name, r.CandidateConfigMap)
+	if candidate {
+		// Owned by the run, the ConfigMap goes when the run is deleted. If
+		// the owner cannot be set, delete it now rather than leak the diff,
+		// and cancel the run, which would otherwise wait for its missing
+		// workspace while holding a quota slot.
+		if uid == "" || cluster.OwnConfigMap(ctx, r.CandidateConfigMap, name, uid) != nil {
+			deleteCandidate()
+			c, cancel := cleanupContext()
+			cancelErr := cluster.Cancel(c, name)
+			cancel()
+			return Outcome{Name: name}, errors.Join(ErrOutcome, cancelErr)
 		}
+	}
+	digest := ""
+	if candidate {
+		sum := sha256.Sum256(r.Candidate)
+		digest = hex.EncodeToString(sum[:])
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
@@ -293,19 +352,45 @@ func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, p
 			if done {
 				if outcome.Name != name || (outcome.Succeeded && outcome.Commit != r.Revision) ||
 					(outcome.Commit != "" && outcome.Commit != r.Revision) ||
-					(outcome.Succeeded && len(r.Candidate) > 0 && outcome.Tree == "") {
-					return Outcome{}, ErrOutcome
+					(outcome.Succeeded && candidate && (outcome.Tree == "" || outcome.CandidateSHA256 == "")) ||
+					(outcome.CandidateSHA256 != "" && outcome.CandidateSHA256 != digest) {
+					return Outcome{Name: name}, ErrOutcome
 				}
 				return outcome, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cancelCtx, cancel := cleanupContext()
 			err := cluster.Cancel(cancelCtx, name)
 			cancel()
-			return Outcome{}, errors.Join(ErrDeadline, err)
+			return Outcome{Name: name}, errors.Join(ErrDeadline, err)
 		case <-ticker.C:
 		}
 	}
+}
+
+// SweepCandidates deletes candidate ConfigMaps that no PipelineRun owns and
+// that are older than olderThan: those a controller left between creating
+// one and setting its owner (a crash, or a failed cleanup). Owned ones go
+// with their run.
+func SweepCandidates(ctx context.Context, cluster Cluster, now time.Time, olderThan time.Duration) error {
+	items, err := cluster.ListCandidateConfigMaps(ctx)
+	if err != nil {
+		return err
+	}
+	var failed error
+	for _, item := range items {
+		name, _, _ := unstructured.NestedString(item, "metadata", "name")
+		owners, _, _ := unstructured.NestedSlice(item, "metadata", "ownerReferences")
+		stamp, _, _ := unstructured.NestedString(item, "metadata", "creationTimestamp")
+		createdAt, perr := time.Parse(time.RFC3339, stamp)
+		if !configMapName.MatchString(name) || len(owners) > 0 || perr != nil || now.Sub(createdAt) < olderThan {
+			continue
+		}
+		if err := cluster.DeleteConfigMap(ctx, name); err != nil {
+			failed = errors.Join(failed, err)
+		}
+	}
+	return failed
 }

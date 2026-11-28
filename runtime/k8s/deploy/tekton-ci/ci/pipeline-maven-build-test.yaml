@@ -78,5 +78,7 @@ spec:
       value: $(tasks.checkout.results.commit)
     - name: tree
       value: $(tasks.apply.results.tree)
+    - name: candidate-sha256
+      value: $(tasks.apply.results.candidate-sha256)
     - name: summary
       value: $(tasks.build-test.results.summary)
