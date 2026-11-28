@@ -39,17 +39,19 @@ spec:
       message: taskRunTemplate allows only serviceAccountName and podTemplate
     - expression: >-
         (!has(object.spec.taskRunTemplate) || !has(object.spec.taskRunTemplate.podTemplate) ||
-         (object.spec.taskRunTemplate.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName']) &&
+         (object.spec.taskRunTemplate.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName']) &&
           (!has(object.spec.taskRunTemplate.podTemplate.runtimeClassName) ||
-           object.spec.taskRunTemplate.podTemplate.runtimeClassName in ['ai-sdlc-offline']))) &&
+           object.spec.taskRunTemplate.podTemplate.runtimeClassName in ['ai-sdlc-offline']) &&
+          !has(object.spec.taskRunTemplate.podTemplate.priorityClassName))) &&
         (!has(object.spec.taskRunSpecs) || object.spec.taskRunSpecs.all(s,
           s.all(k, k in ['pipelineTaskName', 'podTemplate', 'stepSpecs', 'sidecarSpecs', 'computeResources', 'metadata']) &&
           (!has(s.podTemplate) ||
-           (s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName']) &&
-            (!has(s.podTemplate.runtimeClassName) || s.podTemplate.runtimeClassName in ['ai-sdlc-offline']))) &&
+           (s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName']) &&
+            (!has(s.podTemplate.runtimeClassName) || s.podTemplate.runtimeClassName in ['ai-sdlc-offline']) &&
+            (!has(s.podTemplate.priorityClassName) || s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'))) &&
           (!has(s.stepSpecs) || s.stepSpecs.all(x, x.all(k, k in ['name', 'computeResources']))) &&
           (!has(s.sidecarSpecs) || s.sidecarSpecs.all(x, x.all(k, k in ['name', 'computeResources'])))))
-      message: pod templates allow only automountServiceAccountToken, securityContext and the offline runtime class; step and sidecar overrides only computeResources
+      message: pod templates allow only automountServiceAccountToken, securityContext, the offline runtime class and the candidate priority class; step and sidecar overrides only computeResources
     - expression: >-
         has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
         object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update']
@@ -80,8 +82,9 @@ spec:
         object.spec.pipelineRef.name != 'ai-sdlc-maven-build-test' ||
         (has(object.spec.taskRunSpecs) && object.spec.taskRunSpecs.exists(s,
           s.pipelineTaskName == 'build-test' && has(s.podTemplate) && has(s.podTemplate.runtimeClassName) &&
-          s.podTemplate.runtimeClassName == 'ai-sdlc-offline'))
-      message: maven-build-test runs candidate code only under the ai-sdlc-offline sandbox
+          s.podTemplate.runtimeClassName == 'ai-sdlc-offline' && has(s.podTemplate.priorityClassName) &&
+          s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'))
+      message: maven-build-test runs candidate code only under the ai-sdlc-offline sandbox and the candidate pod quota
     - expression: >-
         !has(object.spec.workspaces) || object.spec.workspaces.all(w,
           (w.name == 'source' && w.all(k, k in ['name', 'volumeClaimTemplate']) && has(w.volumeClaimTemplate.spec) &&

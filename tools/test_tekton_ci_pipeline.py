@@ -90,7 +90,8 @@ class ManifestTests(unittest.TestCase):
         kinds = sorted((d['kind'], d['metadata']['name']) for d in documents())
         self.assertEqual(kinds, sorted([
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
-            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'), ('ResourceQuota', 'ai-sdlc-ci-pods'),
+            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'), ('ResourceQuota', 'ai-sdlc-ci-candidate-pods'), ('ResourceQuota', 'ai-sdlc-ci-fetch-pods'),
+            ('PriorityClass', 'ai-sdlc-ci-candidate'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelinerun-labels'),
             ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
@@ -99,7 +100,7 @@ class ManifestTests(unittest.TestCase):
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
             ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
-            if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding'):
+            if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'PriorityClass'):
                 self.assertEqual(doc['metadata']['namespace'], 'ai-sdlc-ci', doc['metadata']['name'])
         for account in by_kind('ServiceAccount').values():
             self.assertIs(account['automountServiceAccountToken'], False, account['metadata']['name'])
@@ -116,7 +117,7 @@ class ManifestTests(unittest.TestCase):
         self.assertIn('s.metadata.labels', rules)
         self.assertIn('request.userInfo.groups', rules, 'cache writers are administrators')
         self.assertIn("['accessModes', 'resources']", rules, 'source claims allow no selector, class, data source or volume')
-        self.assertIn("['automountServiceAccountToken', 'securityContext', 'runtimeClassName']", rules, 'pod template allowlist')
+        self.assertIn("['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName']", rules, 'pod template allowlist')
         self.assertIn("['name', 'computeResources']", rules, 'step and sidecar overrides')
         self.assertIn('readOnly == true', rules)
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
@@ -130,11 +131,22 @@ class ManifestTests(unittest.TestCase):
         binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelinerun-labels']['spec']
         self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-pipelinerun-labels', ['Deny']))
 
-    def test_ci_pods_hold_at_most_three_quarters_of_a_podman_node_pid_limit(self):
-        quota = by_kind('ResourceQuota')['ai-sdlc-ci-pods']['spec']['hard']['pods']
+    def test_candidate_and_fetch_pods_fit_beside_the_measured_node_baseline(self):
+        quotas = by_kind('ResourceQuota')
+        candidate, fetch = quotas['ai-sdlc-ci-candidate-pods']['spec'], quotas['ai-sdlc-ci-fetch-pods']['spec']
+        self.assertEqual(candidate['scopeSelector']['matchExpressions'],
+                         [{'scopeName': 'PriorityClass', 'operator': 'In', 'values': ['ai-sdlc-ci-candidate']}])
+        self.assertEqual(fetch['scopeSelector']['matchExpressions'],
+                         [{'scopeName': 'PriorityClass', 'operator': 'NotIn', 'values': ['ai-sdlc-ci-candidate']}])
+        priority = by_kind('PriorityClass')['ai-sdlc-ci-candidate']
+        self.assertEqual((priority['value'], priority['preemptionPolicy'], priority['globalDefault']), (0, 'Never', False))
         pods = json.loads((tekton.ROOT / 'runtime/k8s/deploy/local/offline-runtime/kubelet-pods.json').read_text())['podPidsLimit']
-        self.assertLessEqual(int(quota) * pods, 0.75 * 2048)
+        node_limit, baseline_peak, fetch_peak = 2048, 1100, 150  # measured on the existing kind nodes and a Maven pod with tests
+        total = baseline_peak + int(candidate['hard']['pods']) * pods + int(fetch['hard']['pods']) * fetch_peak
+        self.assertLessEqual(total, node_limit, total)
         self.assertIn('podPidsLimit: %d' % pods, (tekton.ROOT / 'runtime/k8s/deploy/local/kind.yaml').read_text())
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'", rules, 'build-test must use the candidate quota')
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
@@ -576,7 +588,7 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(template['serviceAccountName'], 'ai-sdlc-ci-runner')
         self.assertIs(template['podTemplate']['automountServiceAccountToken'], False)
         self.assertEqual(spec['taskRunSpecs'], [{'pipelineTaskName': 'build-test', 'podTemplate': dict(
-            template['podTemplate'], runtimeClassName='ai-sdlc-offline')}])
+            template['podTemplate'], runtimeClassName='ai-sdlc-offline', priorityClassName='ai-sdlc-ci-candidate')}])
         for name, task in runner.SANDBOXED_TASKS.items():
             self.assertIn(task, {t['name'] for t in by_kind('Pipeline')[name]['spec']['tasks']})
         self.assertNotIn('taskRunSpecs', runner.maven_build_test('a/b', SHA, '.', ['none'], [])['spec'], 'sandbox is opt-in')

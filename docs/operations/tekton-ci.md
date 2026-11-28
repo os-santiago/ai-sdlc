@@ -254,10 +254,11 @@ offline runtime) now sets two node limits:
   the change keep running without the bound until they are recreated. A value
   that an earlier ai-sdlc revision set (marked, or listed under `previous`,
   such as the earlier 1024 in kind.yaml) is upgraded; any other is refused.
-- **CI concurrency:** a ResourceQuota (`ai-sdlc-ci-pods`) allows two pods in
-  `ai-sdlc-ci`, so at most two PipelineRuns make progress at once, each with
-  one task pod; Tekton retries a task pod refused by the quota until a pod
-  ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
+- **CI concurrency:** candidate code runs only in `build-test` pods, which
+  admission requires to carry the `ai-sdlc-ci-candidate` PriorityClass (value
+  0, never preempts). Two ResourceQuotas scoped by that class allow one
+  candidate pod and one other (fetch) pod at a time; Tekton retries a task pod
+  refused by a quota until a pod ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
   with it, each run held an assistant pod, and two concurrent runs took the
   whole quota while their task pods stayed pending, a deadlock observed in the
   disposable cluster. Tekton does not remove assistants that an earlier
@@ -266,11 +267,15 @@ offline runtime) now sets two node limits:
   (`releasedAssistants` in its report) and keeps those of runs still in
   progress.
 
-The arithmetic for a podman kind node (2,048 pids): CI pods hold at most 2 x
-768 = 1,536 pids (75%), the rest is left for the runtime and system pods, each
-of which is also capped at 768. A runc Maven pod with tests peaked at 146
-pids and the sandboxed build-test at 603, so legitimate runs fit with margin,
-while a fork bomb in any one pod stops at 768.
+The arithmetic for a podman kind node (2,048 pids), with the node's own
+baseline measured on the existing kind nodes (about 560 pids idle, a peak near
+1,100): baseline peak 1,100 + one candidate pod at its 768 limit + one fetch
+pod (trusted inputs; a Maven pod with tests peaked at 146, so about 150) =
+about 2,018. The sandboxed build-test peaked at 603, so it fits its 768 limit,
+and a fork bomb in the candidate pod stops at 768 while fetch pods run only
+reviewed or scriptless code. The kubelet edit also recovers when an earlier
+run moved the file but stopped before the restart: a value present in the file
+but not reported by `/configz` triggers a restart and a second check.
 
 Changing the value: edit the reviewed files and re-run `./install.sh
 sandbox`; the installer replaces its own earlier drop-in and kubelet line.

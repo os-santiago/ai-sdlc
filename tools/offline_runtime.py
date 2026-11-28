@@ -196,7 +196,12 @@ def pod_pid_limit(read, write, command, node_exec, configz):
     values = [line for line in lines if line.startswith('podPidsLimit:')]
     if values == ['podPidsLimit: ' + str(expected)]:
         if configz() != expected:
-            raise ValueError('The kubelet does not report the configured podPidsLimit')
+            # The file holds the value but the running kubelet does not (for
+            # example an earlier run stopped after the move, before the
+            # restart): restart it and check again.
+            command(node_exec + ['systemctl', 'restart', 'kubelet'])
+            if configz() != expected:
+                raise ValueError('The kubelet does not report the configured podPidsLimit after a restart')
         return expected
     ours = KUBELET_MARK in lines or (len(values) == 1 and values[0].split(':', 1)[1].strip().isdigit()
                                      and int(values[0].split(':', 1)[1]) in previous)

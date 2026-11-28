@@ -41,6 +41,8 @@ NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{
 # network=none, so fetch tasks (trusted base inputs, or npm with scripts
 # disabled) always use the default runtime.
 SANDBOXED_TASKS = {'ai-sdlc-maven-build-test': 'build-test'}
+# Candidate-code pods carry this class; a ResourceQuota allows one at a time.
+CANDIDATE_PRIORITY = 'ai-sdlc-ci-candidate'
 POD_SECURITY = {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532, 'fsGroup': 65532,
                 'seccompProfile': {'type': 'RuntimeDefault'}}
 
@@ -142,7 +144,8 @@ def pipeline_run(pipeline, repository, revision, params, workspaces, target, run
         if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?', runtime_class):
             raise ValueError('Invalid runtime class name')
         spec['taskRunSpecs'] = [{'pipelineTaskName': SANDBOXED_TASKS[pipeline],
-                                 'podTemplate': dict(pod, runtimeClassName=runtime_class)}]
+                                 'podTemplate': dict(pod, runtimeClassName=runtime_class,
+                                                     priorityClassName=CANDIDATE_PRIORITY)}]
     return {'apiVersion': 'tekton.dev/v1', 'kind': 'PipelineRun',
             'metadata': {'generateName': pipeline.removeprefix('ai-sdlc-') + '-', 'namespace': tekton_ci_install.CI_NAMESPACE,
                          'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/pipeline': pipeline,

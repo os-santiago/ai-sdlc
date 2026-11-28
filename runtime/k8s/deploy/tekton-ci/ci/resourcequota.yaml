@@ -1,16 +1,60 @@
-# At most two pods at a time in the CI namespace: two PipelineRuns, each
-# running one task pod (Tekton's affinity assistant is disabled; its pods
-# would take quota and leave task pods pending forever). With the kubelet podPidsLimit
-# of 768 (deploy/local/offline-runtime/kubelet-pods.json), CI pods hold at most
-# 2 x 768 = 1536 pids, 75% of a 2048-pid kind node under podman. Tekton keeps a
-# task pending while the quota is exhausted and creates it when a pod ends.
+# Pod-count bounds in the CI namespace, so CI pods stay within the kind node's
+# pid limit (2048 under podman) next to the node's own baseline:
+#
+#   measured node peak without CI  ~1100 pids
+#   one candidate-code pod          768 (kubelet podPidsLimit; sandboxed
+#                                        build-test measured at 603)
+#   one fetch pod                  ~150 (trusted inputs only: checkout,
+#                                        maven-dependencies on the base head,
+#                                        npm with scripts disabled; a Maven
+#                                        pod with tests measured at 146)
+#   total                          ~2018 of 2048
+#
+# Candidate code runs only in build-test pods, which carry the
+# ai-sdlc-ci-candidate PriorityClass (admission requires it); at most one runs
+# at a time. Every other CI pod is a fetch pod, also one at a time. Tekton
+# keeps a refused task pod pending and creates it when a pod ends.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: ai-sdlc-ci-pods
+  name: ai-sdlc-ci-candidate-pods
   namespace: ai-sdlc-ci
   labels:
     app.kubernetes.io/part-of: ai-sdlc
 spec:
   hard:
-    pods: "2"
+    pods: "1"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values: [ai-sdlc-ci-candidate]
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ai-sdlc-ci-fetch-pods
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  hard:
+    pods: "1"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: NotIn
+        values: [ai-sdlc-ci-candidate]
+---
+# Marks candidate-code pods for the quota above. It never preempts and does
+# not raise scheduling priority.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: ai-sdlc-ci-candidate
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+value: 0
+preemptionPolicy: Never
+globalDefault: false
+description: AI-SDLC CI pods that run candidate code (build-test); bounded to one at a time by a ResourceQuota.

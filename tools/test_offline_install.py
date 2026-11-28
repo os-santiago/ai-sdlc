@@ -214,6 +214,16 @@ class SandboxTaskLimitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different podPidsLimit'):
             runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768)
 
+    def test_a_written_but_unapplied_value_restarts_the_kubelet(self):
+        # An earlier run moved the file into place and died before the restart.
+        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\n' + runtime.KUBELET_MARK + '\npodPidsLimit: 768\n')
+        reported = iter([None, 768])
+        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: next(reported)), 768)
+        self.assertEqual(calls, [['podman', 'exec', 'n', 'systemctl', 'restart', 'kubelet']])
+        files, calls, read, write, command = self.fake(kubelet='podPidsLimit: 768\n')
+        with self.assertRaisesRegex(ValueError, 'after a restart'):
+            runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: None)
+
     def test_an_earlier_reviewed_value_is_upgraded(self):
         # kind.yaml of the previous revision set 1024 without the marker.
         files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 1024\n')

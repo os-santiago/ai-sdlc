@@ -229,7 +229,7 @@ def desired_tekton(items, lock, config, cluster_uid):
 def desired_ci(items, cluster_uid):
     for item in items:
         kind, namespace, name = key(item)
-        cluster_scoped = kind in ('ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding')
+        cluster_scoped = kind in ('ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'PriorityClass')
         if cluster_scoped and (namespace or not name.startswith(CI_CLUSTER_PREFIX)):
             raise ValueError('Cluster-scoped Tekton CI objects must be named ' + CI_CLUSTER_PREFIX + '*')
         if not cluster_scoped and ((kind == 'Namespace' and name != CI_NAMESPACE) or (kind != 'Namespace' and namespace != CI_NAMESPACE)):
@@ -377,6 +377,10 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     namespaced = [i for i in ci if i['kind'] != 'Namespace']
     attempts = wait_admission(run, kubectl, namespaced)
     apply(run, kubectl, namespaced)
+    # The single two-pod quota of an earlier revision is replaced by the
+    # candidate and fetch quotas; it would otherwise keep capping both.
+    run(kubectl + ['delete', 'resourcequota', 'ai-sdlc-ci-pods', '-n', CI_NAMESPACE, '--ignore-not-found'],
+        stdout=subprocess.DEVNULL)
     released = release_stale_assistants(run, kubectl)
     observation = observe(run, kubectl, lock)
     if not observation['ready']:
