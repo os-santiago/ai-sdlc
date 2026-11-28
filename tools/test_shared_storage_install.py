@@ -111,10 +111,31 @@ class SharedStorageTests(unittest.TestCase):
 
     def test_option_scope_is_checked_before_any_effect(self):
         for argv in (['status', '--shared-storage'], ['plan', '--shared-storage', '--workers', '0'],
-                     ['sandbox', '--shared-storage']):
+                     ['plan', '--shared-storage'], ['sandbox', '--shared-storage']):
             with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
                  self.assertRaisesRegex(ValueError, 'shared-storage'):
                 install.main(argv)
+
+
+    def test_a_new_cluster_without_workers_is_refused_before_creation(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        calls = []
+
+        def run(command, **_kwargs):
+            argv = [str(v) for v in command]
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, '')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, XDG_STATE_HOME=directory), \
+             patch.object(install, 'tools', return_value={name: name for name in ('helm', 'kind', 'kubectl')}), \
+             patch.object(install.shutil, 'which', return_value='/fixture/provider'), \
+             patch.object(install, 'host_prerequisites'), patch.object(install, 'run', side_effect=run), \
+             self.assertRaisesRegex(ValueError, 'needs workers'):
+            install.main(['local', '--shared-storage', '--cluster', 'c', '--provider', 'podman'])
+        self.assertFalse(any(c[:3] == ['kind', 'create', 'cluster'] for c in calls))
 
 
 if __name__ == '__main__':

@@ -424,6 +424,11 @@ class WorkerTopologyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             network_probe.verify(['kubectl'], 'image', runner=timed, placement=placement, ready_seconds=300)
         self.assertEqual(waits, [('--timeout=300s', 310)])
+        self.assertEqual(applied[-1]['spec']['activeDeadlineSeconds'], 450, 'outlasts the wait plus the checks')
+        applied.clear()
+        with self.assertRaises(ValueError):
+            network_probe.verify(['kubectl'], 'image', runner=runner)
+        self.assertEqual(applied[0]['spec']['activeDeadlineSeconds'], 240, 'the default is unchanged')
 
     def test_lowering_a_worker_needs_room_for_its_admitted_pods(self):
         def runner(pods):

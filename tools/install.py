@@ -561,7 +561,7 @@ def _main(argv, stack):
         raise ValueError('--workers requires plan, local or sandbox on the kind platform')
     if args.shared_storage and (args.platform != 'kind' or args.command not in ('plan', 'local')):
         raise ValueError('--shared-storage requires plan or local on the kind platform')
-    if args.shared_storage and args.workers == 0:
+    if args.shared_storage and (args.workers == 0 or (args.command == 'plan' and not args.workers)):
         raise ValueError('--shared-storage needs workers')
 
     def capacity(workers, installed=None, sandboxed=None, limit=None, lowering=False, running=None, shared=None):
@@ -779,6 +779,9 @@ def _main(argv, stack):
         if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
             raise ValueError('The requested local cluster does not exist')
         created = args.cluster not in clusters
+        if created and args.shared_storage and not args.workers:
+            # A new single-node cluster could never gain the mount or workers.
+            raise ValueError('--shared-storage needs workers')
         if created and node_resources is not None and args.command == 'local':
             # Refuse an impossible budget before creating anything.
             tekton_quotas, node_budget = capacity(args.workers or 0)

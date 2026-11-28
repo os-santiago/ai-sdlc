@@ -94,6 +94,9 @@ def verify(kubectl, image, runner=None, placement=None, ready_seconds=90):
         uid = created['metadata']['uid']
         for name in ('server-a', 'server-b', 'client'):
             value = pod(namespace, name, image)
+            # The deadline counts from the start, before any image pull, and
+            # must outlast the readiness wait plus the connectivity checks.
+            value['spec']['activeDeadlineSeconds'] = max(240, ready_seconds + 150)
             if placement:
                 value['spec'].update(placement)
             apply(value)
