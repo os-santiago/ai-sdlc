@@ -82,6 +82,8 @@ func (d *toolDispatch) poll(ctx context.Context) error {
 // It never forwards an underlying error, cluster detail or log.
 func toolFailure(err error) (int, string) {
 	switch {
+	case errors.Is(err, tektontasks.ErrToolBusy):
+		return 429, "Another tool call of this generation is still running. Tools run one at a time: wait for its result, then call again if needed."
 	case errors.Is(err, tektontasks.ErrToolBudget):
 		return 429, "The tool budget of this generation is exhausted; finish without further tool calls."
 	case errors.Is(err, tektontasks.ErrRequest):

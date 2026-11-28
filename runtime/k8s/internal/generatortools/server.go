@@ -227,12 +227,29 @@ func call(ctx context.Context, spec Spec, candidate Candidate, relay Relay, requ
 		return toolText(request.ID, "tool run unavailable", true)
 	}
 	var reply struct {
-		Text string `json:"text"`
+		Text  string `json:"text"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if json.Unmarshal(answer, &reply) != nil || reply.Text == "" {
-		reply.Text = fmt.Sprintf("tool run returned status %d", status)
+		reply.Text = mailboxRefusal(status, reply.Error.Message)
 	}
 	return toolText(request.ID, reply.Text, status != 200)
+}
+
+// mailboxRefusal explains a refusal the mailbox itself answered, before any
+// run: the generator may call tools one at a time and up to its budget.
+func mailboxRefusal(status int, code string) string {
+	switch code {
+	case "tool_call_already_pending":
+		return "Another tool call is still running. Tools run one at a time: wait for its result, then call again if needed."
+	case "local_tool_limit":
+		return "The tool call budget of this generation is used up; finish without further tool calls."
+	case "tool_deadline":
+		return "The tool run did not answer within its window."
+	}
+	return fmt.Sprintf("tool run returned status %d", status)
 }
 
 func hasDotSegment(path string) bool {

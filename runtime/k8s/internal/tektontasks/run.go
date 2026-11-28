@@ -27,6 +27,9 @@ const MaxResultBytes = 4096
 var ErrOutcome = errors.New("tekton run outcome is not the bounded catalog shape")
 
 // ErrDeadline reports a run that did not finish within the caller's bound.
+// ErrJournal stops a run whose objects could not be journaled.
+var ErrJournal = errors.New("tekton tool run could not be journaled")
+
 var ErrDeadline = errors.New("tekton run did not finish within its bound")
 
 var pipelineRuns = schema.GroupVersionResource{Group: "tekton.dev", Version: "v1", Resource: "pipelineruns"}
@@ -287,14 +290,15 @@ func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, p
 }
 
 // Created receives the names of a run's objects as soon as each exists: the
-// candidate ConfigMap (pipelineRun still empty), then the PipelineRun.
-type Created func(pipelineRun, configMap string)
+// candidate ConfigMap (pipelineRun still empty), then the PipelineRun. An
+// error aborts the run: nothing runs that its journal does not name.
+type Created func(pipelineRun, configMap string) error
 
 // RunReporting is Run that reports created object names, so a journal can
 // record them before the run finishes or fails.
 func RunReporting(ctx context.Context, cluster Cluster, r Request, runtimeClass string, poll time.Duration, created Created) (Outcome, error) {
 	if created == nil {
-		created = func(string, string) {}
+		created = func(string, string) error { return nil }
 	}
 	if len(r.Candidate) > 0 && r.CandidateConfigMap == "" {
 		r.CandidateConfigMap = NewCandidateName(r.Candidate)
@@ -315,14 +319,25 @@ func RunReporting(ctx context.Context, cluster Cluster, r Request, runtimeClass 
 		if err := cluster.CreateConfigMap(ctx, CandidateObject(r.CandidateConfigMap, r.Candidate)); err != nil {
 			return Outcome{}, errors.Join(ErrOutcome, err)
 		}
-		created("", r.CandidateConfigMap)
+		if err := created("", r.CandidateConfigMap); err != nil {
+			deleteCandidate()
+			return Outcome{}, errors.Join(ErrJournal, err)
+		}
 	}
 	name, uid, err := cluster.Create(ctx, object)
 	if err != nil || name == "" {
 		deleteCandidate()
 		return Outcome{}, errors.Join(ErrOutcome, err)
 	}
-	created(name, r.CandidateConfigMap)
+	cancelRun := func() error {
+		c, cancel := cleanupContext()
+		defer cancel()
+		return cluster.Cancel(c, name)
+	}
+	if err := created(name, r.CandidateConfigMap); err != nil {
+		deleteCandidate()
+		return Outcome{Name: name}, errors.Join(ErrJournal, err, cancelRun())
+	}
 	if candidate {
 		// Owned by the run, the ConfigMap goes when the run is deleted. If
 		// the owner cannot be set, delete it now rather than leak the diff,
@@ -330,10 +345,7 @@ func RunReporting(ctx context.Context, cluster Cluster, r Request, runtimeClass 
 		// workspace while holding a quota slot.
 		if uid == "" || cluster.OwnConfigMap(ctx, r.CandidateConfigMap, name, uid) != nil {
 			deleteCandidate()
-			c, cancel := cleanupContext()
-			cancelErr := cluster.Cancel(c, name)
-			cancel()
-			return Outcome{Name: name}, errors.Join(ErrOutcome, cancelErr)
+			return Outcome{Name: name}, errors.Join(ErrOutcome, cancelRun())
 		}
 	}
 	digest := ""

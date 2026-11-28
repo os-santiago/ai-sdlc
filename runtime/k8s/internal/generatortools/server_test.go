@@ -87,16 +87,20 @@ func TestServerRefusesUndeclaredCallsWithoutRelaying(t *testing.T) {
 }
 
 func TestServerReportsRelayFailuresAsToolErrors(t *testing.T) {
-	relay := func(context.Context, []byte) (int, []byte, error) {
-		return 429, []byte(`{"error":{"message":"local_tool_limit"}}`), nil
-	}
-	replies := exchange(t, []string{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_test","arguments":{"target":"rest-villains"}}}`}, relay)
-	result := replies[0]["result"].(map[string]any)
-	if result["isError"] != true || !strings.Contains(result["content"].([]any)[0].(map[string]any)["text"].(string), "429") {
-		t.Fatal(result)
+	for code, want := range map[string]string{"local_tool_limit": "budget of this generation is used up",
+		"tool_call_already_pending": "Another tool call is still running", "tool_deadline": "did not answer within its window",
+		"other": "status 429"} {
+		relay := func(context.Context, []byte) (int, []byte, error) {
+			return 429, []byte(`{"error":{"type":"mailbox","message":"` + code + `"}}`), nil
+		}
+		replies := exchange(t, []string{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_test","arguments":{"target":"rest-villains"}}}`}, relay)
+		result := replies[0]["result"].(map[string]any)
+		if result["isError"] != true || !strings.Contains(result["content"].([]any)[0].(map[string]any)["text"].(string), want) {
+			t.Fatal(code, result)
+		}
 	}
 	broken := func(context.Context, []byte) (int, []byte, error) { return 0, nil, errors.New("down") }
-	replies = exchange(t, []string{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_test","arguments":{"target":"rest-villains"}}}`}, broken)
+	replies := exchange(t, []string{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_test","arguments":{"target":"rest-villains"}}}`}, broken)
 	if replies[0]["result"].(map[string]any)["isError"] != true {
 		t.Fatal(replies)
 	}
@@ -165,5 +169,37 @@ func TestGitCandidateDiffsAgainstTheBaselineWithoutTouchingTheIndex(t *testing.T
 	os.WriteFile(filepath.Join(repo, "C.txt"), bytes.Repeat([]byte("x\n"), MaxDiffBytes), 0o644)
 	if _, err := GitCandidate(git, repo, scratch)(context.Background()); err == nil {
 		t.Fatal("accepted an oversized candidate")
+	}
+}
+
+// A moved file reaches apply-candidate as a deletion and an addition, which
+// its work tree check accepts (it admits only staged M, A and D entries),
+// even when the generator's git configuration enables rename detection.
+func TestGitCandidateSendsRenamesAsDeleteAndAdd(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	repo, scratch := t.TempDir(), t.TempDir()
+	run := func(args ...string) {
+		command := exec.Command(git, args...)
+		command.Dir = repo
+		command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+scratch)
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatal(args, string(out))
+		}
+	}
+	os.WriteFile(filepath.Join(repo, "A.java"), []byte("class A {\n  int a;\n  int b;\n}\n"), 0o644)
+	run("init", "-q", "--initial-branch="+BaselineRef)
+	run("config", "diff.renames", "copies")
+	run("add", "-A")
+	run("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "baseline")
+	if err := os.Rename(filepath.Join(repo, "A.java"), filepath.Join(repo, "Moved.java")); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := GitCandidate(git, repo, scratch)(context.Background())
+	if err != nil || strings.Contains(diff, "rename from") || !strings.Contains(diff, "deleted file mode 100644") ||
+		!strings.Contains(diff, "new file mode 100644") || !strings.Contains(diff, "+++ b/Moved.java") {
+		t.Fatal("rename not sent as delete and add", err, diff)
 	}
 }

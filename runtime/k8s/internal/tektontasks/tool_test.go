@@ -13,10 +13,11 @@ import (
 )
 
 type memJournal struct {
-	mu       sync.Mutex
-	begun    []string
-	created  map[int][]string
-	finished map[int]ToolRecord
+	failCreated bool
+	mu          sync.Mutex
+	begun       []string
+	created     map[int][]string
+	finished    map[int]ToolRecord
 }
 
 func (j *memJournal) Begin(_ context.Context, digest string) (int, error) {
@@ -29,6 +30,9 @@ func (j *memJournal) Begin(_ context.Context, digest string) (int, error) {
 func (j *memJournal) Created(_ context.Context, sequence int, run, configMap string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.failCreated && run != "" {
+		return errors.New("journal down")
+	}
 	if j.created == nil {
 		j.created = map[int][]string{}
 	}
@@ -128,7 +132,7 @@ func TestToolBudgetSecondsHoldUnderConcurrentCalls(t *testing.T) {
 	if err != nil || first != 100*time.Second {
 		t.Fatal("first reservation", first, err)
 	}
-	if _, err := budget.reserve(); !errors.Is(err, ErrToolBudget) {
+	if _, err := budget.reserve(); !errors.Is(err, ErrToolBusy) || !errors.Is(err, ErrToolBudget) {
 		t.Fatal("a concurrent call got seconds already reserved", err)
 	}
 	budget.settle(first, 30*time.Second)
@@ -137,8 +141,8 @@ func TestToolBudgetSecondsHoldUnderConcurrentCalls(t *testing.T) {
 		t.Fatal("refund", second, err)
 	}
 	budget.settle(second, time.Hour)
-	if _, err := budget.reserve(); !errors.Is(err, ErrToolBudget) {
-		t.Fatal("an overrun call refunded seconds", err)
+	if _, err := budget.reserve(); !errors.Is(err, ErrToolBudget) || errors.Is(err, ErrToolBusy) {
+		t.Fatal("an overrun call refunded seconds, or exhaustion reads as busy", err)
 	}
 	var wg sync.WaitGroup
 	parallel := &ToolBudget{MaxCalls: 8, MaxSeconds: 60}
@@ -161,12 +165,30 @@ func TestToolBudgetSecondsHoldUnderConcurrentCalls(t *testing.T) {
 	}
 }
 
+// Nothing keeps running that the journal does not name: a failure to record
+// the PipelineRun cancels it and deletes the candidate.
+func TestToolRunAbortsWhenItsObjectsCannotBeJournaled(t *testing.T) {
+	call := ToolCall{Tool: "build_test", Target: "rest-villains", Diff: "--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-a\n+b\n"}
+	cluster := &fakeCluster{reads: []map[string]any{summaryStatus(failingSummary, call.Diff)}}
+	journal := &memJournal{failCreated: true}
+	_, err := InvokeTool(context.Background(), cluster, journal, &ToolBudget{MaxCalls: 1, MaxSeconds: 600}, manifest(), call, sha, "", time.Millisecond)
+	if !errors.Is(err, ErrJournal) || cluster.cancelled != "run-1" || len(cluster.deleted) != 1 || journal.finished[1].State != "error" ||
+		journal.finished[1].PipelineRun != "run-1" {
+		t.Fatal("unjournaled run kept running", err, cluster.cancelled, cluster.deleted, journal.finished)
+	}
+}
+
 func TestToolCallsDecodeStrictly(t *testing.T) {
 	if _, err := ParseToolCall([]byte(`{"tool":"build_test","target":"m","diff":"","extra":1}`)); err == nil {
 		t.Fatal("accepted an unknown field")
 	}
 	if c, err := ParseToolCall([]byte(`{"tool":"build_test","target":"m","diff":"d"}`)); err != nil || c.Target != "m" {
 		t.Fatal("parse", c, err)
+	}
+	for _, trailing := range []string{`{"tool":"build_test","target":"m","diff":"d"}{"tool":"x"}`, `{"tool":"build_test","target":"m","diff":"d"} []`} {
+		if _, err := ParseToolCall([]byte(trailing)); err == nil {
+			t.Fatal("accepted trailing data", trailing)
+		}
 	}
 	// The bound is on the decoded diff: escaping may grow its encoding.
 	for size, ok := range map[int]bool{MaxCandidateBytes: true, MaxCandidateBytes + 1: false} {

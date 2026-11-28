@@ -71,6 +71,9 @@ func TestToolDispatchRunsEachCallOnceInOrder(t *testing.T) {
 	if failed.Status != 500 || strings.Contains(string(failed.Payload), "secret") {
 		t.Fatal("failure leaked or misclassified", failed.Status, string(failed.Payload))
 	}
+	if status, text := toolFailure(tektontasks.ErrToolBusy); status != 429 || !strings.Contains(text, "still running") {
+		t.Fatal("busy", status, text)
+	}
 	for err, status := range map[error]int{tektontasks.ErrToolBudget: 429, tektontasks.ErrRequest: 403, tektontasks.ErrDeadline: 504, context.DeadlineExceeded: 504} {
 		if got, _ := toolFailure(err); got != status {
 			t.Fatal("status", err, got)

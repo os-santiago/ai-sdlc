@@ -84,10 +84,11 @@ spec:
         # Text diffs inside the tree only: no binary patches, no absolute or
         # parent paths, no changes to git metadata.
         if grep -Eq '^(GIT binary patch|Binary files )' "$diff"; then echo 'binary candidate changes are not supported' >&2; exit 2; fi
-        # Regular files only: no symbolic links (mode 120000) or submodules
-        # (160000), whatever core.symlinks would do with them.
+        # Regular files only: no symbolic link (mode 120000) or submodule
+        # (160000) is added, changed or deleted, whatever core.symlinks would
+        # do with it.
         if grep -Eq '^((old|new|new file|deleted file) mode|index [0-9a-f]+\.\.[0-9a-f]+) (120000|160000)$' "$diff"; then
-          echo 'candidate diff adds a symbolic link or submodule' >&2; exit 2
+          echo 'candidate diff adds, changes or deletes a symbolic link or submodule' >&2; exit 2
         fi
         if git apply --numstat "$diff" | cut -f3- | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.git(/|$))'; then
           echo 'candidate diff touches a path outside the tree' >&2; exit 2
@@ -102,7 +103,9 @@ spec:
         # The build compiles the work tree; the tree id must describe all of
         # it. Anything not staged (untracked, ignored or modified outside
         # the index) means the two differ.
-        if git status --porcelain=v1 --ignored --untracked-files=all | grep -Ev '^[MAD] ' | grep -q .; then
+        # --no-renames: status would otherwise pair a staged deletion and
+        # addition into R, which is the same content and still in the index.
+        if git status --porcelain=v1 --no-renames --ignored --untracked-files=all | grep -Ev '^[MAD] ' | grep -q .; then
           echo 'candidate work tree differs from the applied index' >&2; exit 2
         fi
         tree="$(git write-tree)"

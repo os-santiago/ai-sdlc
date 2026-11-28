@@ -206,7 +206,9 @@ execution controller (worker) ──pods/exec read-tool──┘
   and paths outside the tree or under `.git`, applies the diff to the work
   tree and the index together (`git apply --index`, symlinks disabled), fails
   if the work tree then differs from the index (untracked, ignored or
-  unstaged files), and reports the resulting tree id and the digest it
+  unstaged files; the tools server sends moves as a deletion and an addition,
+  `git diff --no-renames`, and the check reads status without rename
+  pairing), and reports the resulting tree id and the digest it
   applied. `Run` checks that reported digest against the diff it sent and
   reports the tree in the result. The ConfigMap is owned by the PipelineRun
   and deleted with it; if the owner cannot be set, the ConfigMap is deleted
@@ -248,6 +250,12 @@ execution controller (worker) ──pods/exec read-tool──┘
   (`tool-request.json`, `tool-response.json`, answer at most 16 KiB), read and
   written by the fixed `read-tool` and `respond-tool` helper modes over
   pods/exec, bound to the attempt and Pod UID like model calls.
+- **One call at a time.** The mailbox refuses a second concurrent call and
+  the tools server tells the generator to wait for the running one; the
+  controller's budget reports a call that finds the seconds held by a running
+  call as busy (`ErrToolBusy`), not exhausted. A run whose ConfigMap or
+  PipelineRun name cannot be journaled is cancelled and its candidate
+  deleted (`ErrJournal`).
 - **Dispatch.** The controller's drive loop answers one pending tool call per
   cycle in which no model request is pending (the generator waits for the
   tool, so none is). A repeated sequence is answered once; a skipped or

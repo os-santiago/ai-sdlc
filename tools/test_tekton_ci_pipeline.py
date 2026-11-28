@@ -346,11 +346,25 @@ class ScriptTests(unittest.TestCase):
                           None, 'symbolic link or submodule'),
             'does not apply': (b'--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-class B {}\n+class C {}\n', None, 'does not apply'),
             'size bound': (b'x' * (786432 + 1), None, 'exceeds 768 KiB'),
+            'symlink deletion': (b'diff --git a/l b/l\ndeleted file mode 120000\nindex e69de29..0000000\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n',
+                                 None, 'adds, changes or deletes a symbolic link'),
         }
         for name, (diff, digest, message) in cases.items():
             result = self.apply_candidate(diff, digest)[0]
             self.assertEqual(result.returncode, 2, (name, result.stderr))
             self.assertIn(message, result.stderr, name)
+
+    def test_apply_candidate_accepts_a_move_sent_as_delete_and_add(self):
+        # The tools server sends moves this way (git diff --no-renames); the
+        # work tree check admits the staged D and A entries.
+        diff = (b'diff --git a/A.java b/A.java\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/A.java\n+++ /dev/null\n'
+                b'@@ -1 +0,0 @@\n-class A {}\n'
+                b'diff --git a/Moved.java b/Moved.java\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/Moved.java\n'
+                b'@@ -0,0 +1 @@\n+class A {}\n')
+        result, tree, source = self.apply_candidate(diff)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        listed = subprocess.run(['git', '-C', str(source), 'ls-tree', '--name-only', tree], capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(listed, ['Moved.java'])
 
     def test_apply_candidate_tree_includes_files_a_gitignore_in_the_diff_hides(self):
         diff = (b'diff --git a/.gitignore b/.gitignore\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/.gitignore\n'
