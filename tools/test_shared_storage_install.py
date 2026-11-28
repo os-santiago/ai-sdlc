@@ -74,12 +74,17 @@ class SharedStorageTests(unittest.TestCase):
     def test_shared_mount_detection_refuses_partial_mounts(self):
         def run(mounted):
             return lambda args, **_k: SimpleNamespace(stdout=json.dumps(
-                [{'Destination': kind_nodes.SHARED_PATH}] if mounted[args[-1]] else [{'Destination': '/x'}]))
+                [{'Destination': kind_nodes.SHARED_PATH, 'Source': mounted[args[-1]]}] if mounted[args[-1]]
+                else [{'Destination': '/x', 'Source': '/y'}]))
         names = ['c-control-plane', 'c-worker']
-        self.assertTrue(kind_nodes.shared_mounted(run({'c-control-plane': True, 'c-worker': True}), 'podman', names))
-        self.assertFalse(kind_nodes.shared_mounted(run({'c-control-plane': False, 'c-worker': False}), 'podman', names))
+        both = {'c-control-plane': '/state/c/shared', 'c-worker': '/state/c/shared'}
+        self.assertTrue(kind_nodes.shared_mounted(run(both), 'podman', names))
+        self.assertEqual(kind_nodes.shared_source(run(both), 'podman', names), '/state/c/shared')
+        self.assertIsNone(kind_nodes.shared_source(run({'c-control-plane': None, 'c-worker': None}), 'podman', names))
         with self.assertRaisesRegex(ValueError, 'Only some'):
-            kind_nodes.shared_mounted(run({'c-control-plane': True, 'c-worker': False}), 'podman', names)
+            kind_nodes.shared_mounted(run({'c-control-plane': '/state/c/shared', 'c-worker': None}), 'podman', names)
+        with self.assertRaisesRegex(ValueError, 'different shared storage directories'):
+            kind_nodes.shared_source(run({'c-control-plane': '/a', 'c-worker': '/b'}), 'podman', names)
 
     def test_shared_caches_spread_ci_and_scale_the_quotas(self):
         self.assertEqual(kind_nodes.tekton_pod_template(True)['nodeSelector'], {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX})
@@ -139,12 +144,34 @@ class SharedStorageTests(unittest.TestCase):
         self.assertFalse(any(c[:3] == ['kind', 'create', 'cluster'] for c in calls))
 
 
-    def test_the_default_policy_keeps_mains_bytes(self):
-        main = subprocess.run(['git', 'show', 'origin/main:runtime/k8s/deploy/tekton-ci/ci/admission-policy.yaml'],
-                              cwd=tekton.ROOT, capture_output=True)
-        if main.returncode:
-            self.skipTest('origin/main is not available')
-        self.assertEqual((tekton.CI_DIR / 'admission-policy.yaml').read_bytes(), main.stdout)
+    # The committed (default-mode) policy. Shared storage must never edit
+    # it; a deliberate policy change updates this digest in the same commit.
+    DEFAULT_POLICY_SHA256 = '7f3e53d8288a23c5b5d349f6a03f16587aa5c8a3309a90597ea18c097f28063b'
+
+    def test_the_default_policy_admits_only_the_ci_worker(self):
+        import hashlib
+        raw = (tekton.CI_DIR / 'admission-policy.yaml').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), self.DEFAULT_POLICY_SHA256,
+                         'admission-policy.yaml changed: review it and update DEFAULT_POLICY_SHA256')
+        text = raw.decode()
+        self.assertEqual(text.count(tekton.CI_PLACEMENT), 1)
+        self.assertNotIn(tekton.SHARED_PLACEMENT, text)
+
+    def policy(self, name='ai-sdlc-ci-pipelineruns', expressions=None):
+        return {'kind': 'ValidatingAdmissionPolicy', 'metadata': {'name': name},
+                'spec': {'validations': [{'expression': e} for e in (expressions or ['x.' + tekton.CI_PLACEMENT])]}}
+
+    def test_the_shared_rewrite_touches_exactly_one_placement_of_one_policy(self):
+        other = self.policy('ai-sdlc-ci-other')
+        items = tekton.shared_placement([self.policy(), other])
+        self.assertIn(tekton.SHARED_PLACEMENT, items[0]['spec']['validations'][0]['expression'])
+        self.assertIn(tekton.CI_PLACEMENT, other['spec']['validations'][0]['expression'], 'other policies stay as they are')
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            tekton.shared_placement([self.policy(expressions=['a.' + tekton.CI_PLACEMENT, 'b.' + tekton.CI_PLACEMENT])])
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            tekton.shared_placement([self.policy(expressions=['nothing'])])
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            tekton.shared_placement([other])
 
     def test_the_host_directory_is_0700_and_repaired(self):
         import os
@@ -158,6 +185,9 @@ class SharedStorageTests(unittest.TestCase):
             path.chmod(0o755)
             self.assertTrue(shared_storage.ensure_host_dir(path)['repaired'])
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            with patch.object(os, 'geteuid', return_value=os.geteuid() + 1), \
+                 self.assertRaisesRegex(ValueError, 'owned by the installing user'):
+                shared_storage.ensure_host_dir(path)
             link = Path(root) / 'link'
             link.symlink_to(path)
             with self.assertRaisesRegex(ValueError, 'symlink'):

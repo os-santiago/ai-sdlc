@@ -463,8 +463,12 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
     # Tekton kinds are only known to kubectl once the CRDs are established.
     ci = apply_pod_quotas(desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)) + claims,
                                      cluster_uid), quotas)
+    policy_digest = None
     if cache_storage_class:
         ci = shared_placement(ci)
+        # The applied policy differs from the committed bytes in ciSHA256.
+        policy_digest = digest(json.dumps([i for i in ci if i['kind'] == 'ValidatingAdmissionPolicy'],
+                                          sort_keys=True, separators=(',', ':')).encode())
     require_ownership(run, kubectl, ci, cluster_uid)
     # A server dry run cannot create the namespace its other objects need.
     apply(run, kubectl, [i for i in ci if i['kind'] == 'Namespace'])
@@ -482,7 +486,8 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
                 admissionAttempts=attempts, releasedAssistants=released, podQuotas=quotas,
                 **({'defaultPodTemplate': pod_template} if pod_template is not None else {}),
-                **({'cacheStorageClass': cache_storage_class, 'admittedPlacement': 'sandbox-workers'}
+                **({'cacheStorageClass': cache_storage_class, 'admittedPlacement': 'sandbox-workers',
+                    'appliedAdmissionPolicySHA256': policy_digest}
                    if cache_storage_class else {}),
                 cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 

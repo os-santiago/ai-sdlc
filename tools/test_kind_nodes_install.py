@@ -536,7 +536,7 @@ class InstallerWiringTests(unittest.TestCase):
                     {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': role}))
             if argv_[:2] == ['podman', 'inspect'] and argv_[3] == '{{json .Mounts}}':
                 return subprocess.CompletedProcess(argv_, 0, json.dumps(
-                    [{'Destination': kind_nodes.SHARED_PATH}] if shared else []))
+                    [{'Destination': kind_nodes.SHARED_PATH, 'Source': '/host/state/c/shared'}] if shared else []))
             if 'resourcequota' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'items': [
                     {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}},
@@ -572,6 +572,8 @@ class InstallerWiringTests(unittest.TestCase):
                                              side_effect=lambda *a, **k: full.setdefault('probes', []).append(k.get('placement')) or full.setdefault('waits', []).append(k.get('ready_seconds', 90)) or {}))
             extra.enter_context(patch.object(tekton_ci_install, 'install', side_effect=tekton))
             import shared_storage
+            extra.enter_context(patch.object(shared_storage, 'ensure_host_dir',
+                                             side_effect=lambda p: full.setdefault('dirs', []).append(str(p)) or {}))
             extra.enter_context(patch.object(shared_storage, 'configure',
                                              side_effect=lambda *a: full.setdefault('shared', True) and {}))
         policy = {'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'uid'}},
@@ -630,6 +632,21 @@ class InstallerWiringTests(unittest.TestCase):
         self.assertEqual(plain['tekton'][6], {'candidate': 1, 'fetch': 1})
         with self.assertRaisesRegex(ValueError, 'without --shared-storage'):
             self.drive(['local', '--shared-storage'], workers=2)
+
+    def test_reinstall_checks_the_mounted_host_directory(self):
+        full = {}
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], workers=2, full=full, shared=True)
+        self.assertEqual(full['dirs'], ['/host/state/c/shared'], 'the mount source, not state/shared')
+
+    def test_a_new_shared_cluster_creates_its_directory_first(self):
+        import shared_storage
+        calls = []
+        with patch.object(shared_storage, 'ensure_host_dir', side_effect=ValueError('host directory checked')) as ensure:
+            with self.assertRaisesRegex(ValueError, 'host directory checked'):
+                self.drive(['local', '--workers', '2', '--shared-storage'], existing=False, calls=calls)
+        self.assertTrue(str(ensure.call_args.args[0]).endswith('/ai-sdlc/c/shared'))
+        self.assertFalse(any(c[:3] == ['kind', 'create', 'cluster'] for c in calls), 'checked before kind create')
 
     def test_a_different_worker_count_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'kind cannot change'):

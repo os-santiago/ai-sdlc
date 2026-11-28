@@ -425,17 +425,28 @@ def topology(run, provider, kind, cluster, env):
     return {'controlPlane': control[0], 'workers': workers}
 
 
-def shared_mounted(run, provider, names):
-    """Whether every node mounts the shared storage directory (a cluster
-    created with --shared-storage); a partial mount is refused."""
-    found = []
+def shared_source(run, provider, names):
+    """The host directory every node mounts at SHARED_PATH (a cluster
+    created with --shared-storage), or None when no node mounts it. A
+    partial mount, or nodes mounting different host directories, is
+    refused: the caches would differ between nodes."""
+    sources = []
     for name in names:
         raw = _command(run, [provider, 'inspect', '--format', '{{json .Mounts}}', name]).stdout
         mounts = json.loads(raw) if raw and raw.strip() else []
-        found.append(any((m.get('Destination') or m.get('destination')) == SHARED_PATH for m in mounts or []))
-    if any(found) and not all(found):
+        sources.append(next(((m.get('Source') or m.get('source') or '') for m in mounts or []
+                             if (m.get('Destination') or m.get('destination')) == SHARED_PATH), None))
+    found = [s for s in sources if s is not None]
+    if found and len(found) != len(sources):
         raise ValueError('Only some kind nodes mount the shared storage directory')
-    return bool(found) and all(found)
+    if len(set(found)) > 1 or (found and not found[0]):
+        raise ValueError('The kind nodes mount different shared storage directories (%s)' % ', '.join(sorted(set(found))))
+    return found[0] if found else None
+
+
+def shared_mounted(run, provider, names):
+    """Whether every node mounts the shared storage directory."""
+    return shared_source(run, provider, names) is not None
 
 
 def sandbox_nodes(nodes):

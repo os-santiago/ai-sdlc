@@ -822,8 +822,11 @@ def _main(argv, stack):
             raise ValueError('The cluster has %d workers; kind cannot change that, so use another --cluster'
                              % len(nodes['workers']))
         # Shared storage is a mount fixed at creation, like the workers.
-        nodes['shared'] = bool(nodes['workers']) and kind_nodes.shared_mounted(
-            run, provider, [nodes['controlPlane']] + nodes['workers'])
+        # The host directory comes from the node mounts, not from this run's
+        # state path (which follows XDG_STATE_HOME or HOME).
+        nodes['sharedSource'] = kind_nodes.shared_source(
+            run, provider, [nodes['controlPlane']] + nodes['workers']) if nodes['workers'] else None
+        nodes['shared'] = nodes['sharedSource'] is not None
         if args.shared_storage and not nodes['shared']:
             raise ValueError('The cluster was created without --shared-storage; kind cannot add the mount, so use '
                              'another --cluster')
@@ -856,7 +859,7 @@ def _main(argv, stack):
         if nodes['shared']:
             import shared_storage
             # Re-checked on every run: a loosened host directory is repaired.
-            print(json.dumps({'sharedStorageHostDirectory': shared_storage.ensure_host_dir(state / 'shared')}),
+            print(json.dumps({'sharedStorageHostDirectory': shared_storage.ensure_host_dir(nodes['sharedSource'])}),
                   file=sys.stderr)
             print(json.dumps({'sharedStorage': shared_storage.configure(run, kubectl, args.timeout)}), file=sys.stderr)
             kind_nodes.schedule(run, kubectl, nodes, shared=True)
