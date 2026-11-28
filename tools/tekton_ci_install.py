@@ -264,7 +264,7 @@ def pod_quotas(candidate=None, fetch=None, workers=0):
     return quotas
 
 
-def installed_pod_quotas(run, kubectl):
+def installed_pod_quotas(run, kubectl, used_only=False):
     """The candidate and fetch pod quotas currently in the cluster (0 when
     Tekton CI is not installed). Omitting --tekton-ci later keeps them, so the
     node pid budget must cover them as well as any requested change. Lowering
@@ -281,7 +281,7 @@ def installed_pod_quotas(run, kubectl):
         if role is not None:
             if not pods.isdigit() or not used.isdigit():
                 raise ValueError('Unexpected Tekton CI pod quota value')
-            found[role] = max(int(pods), int(used))
+            found[role] = int(used) if used_only else max(int(pods), int(used))
     return found
 
 

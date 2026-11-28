@@ -440,7 +440,7 @@ class InstallerWiringTests(unittest.TestCase):
         pass
 
     def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192, existing=True,
-              calls=None, workers=0, full=None):
+              calls=None, workers=0, full=None, running_candidate=0):
         import os
         import subprocess
         import offline_runtime
@@ -465,7 +465,8 @@ class InstallerWiringTests(unittest.TestCase):
                     {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': role}))
             if 'resourcequota' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'items': [
-                    {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}}},
+                    {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}},
+                     'status': {'used': {'pods': str(running_candidate)}}},
                     {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': str(installed_fetch)}}}]}))
             if 'runtimeclass' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, 'runtimeclass.node.k8s.io/ai-sdlc-offline\n' if runtime_class else '')
@@ -574,6 +575,9 @@ class InstallerWiringTests(unittest.TestCase):
         # over-budget installation can be brought back within the budget.
         with self.assertRaises(self.Reached):
             self.drive(['local', '--tekton-ci'], installed_candidate=10)
+        # Pods still running from the larger quota count until they end.
+        with self.assertRaisesRegex(ValueError, 'cannot hold'):
+            self.drive(['local', '--tekton-ci'], installed_candidate=10, running_candidate=10)
         # Omitting --tekton-ci keeps the installed quotas, which still count.
         with self.assertRaisesRegex(ValueError, 'cannot hold'):
             self.drive(['local'], installed_candidate=10)
