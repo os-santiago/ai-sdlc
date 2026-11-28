@@ -211,6 +211,7 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	MergeAttemptsExhausted()
 	Quarantined("merge", true)
 	Quarantined("os-santiago/saferus", false)
+	MergeWaiting([]string{"review-threads-unresolved", "forge said: blocked by @someone"}, 2)
 	allowed := map[string]map[string]bool{
 		"component": set(append(Components, Other)...),
 		"loop":      set(append(Loops, Other)...),
@@ -218,6 +219,7 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 		"outcome":   set(append(append(append(append(ModelOutcomes, DeliveryOutcomes...), ReconciliationOutcomes...), MergeReconciliationOutcomes...), Other)...),
 		"effect":    set(append(ReconciliationEffects, Other)...),
 		"journal":   set(append(QuarantineJournals, Other)...),
+		"reason":    set(append(MergeWaitReasons, Other)...),
 		"stage":     nil, // bounded by the diagnostic functions and the charset
 	}
 	queue := set(append(QueueStages, Other)...)
@@ -268,6 +270,12 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	}
 	if v, _ := Default.Sample("ai_sdlc_quarantined", "merge"); v != 1 {
 		t.Fatal("merge quarantine not recorded", v)
+	}
+	if v, _ := Default.Sample("ai_sdlc_merge_waiting", "review-threads-unresolved"); v != 1 {
+		t.Fatal("merge wait blocker not recorded", v)
+	}
+	if v, _ := Default.Sample("ai_sdlc_merge_unresolved_review_threads"); v != 2 {
+		t.Fatal("unresolved thread count not recorded", v)
 	}
 	ForgetQuarantined("merge")
 	if _, ok := Default.Sample("ai_sdlc_quarantined", "merge"); ok {

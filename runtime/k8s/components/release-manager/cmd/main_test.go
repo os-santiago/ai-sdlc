@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 )
@@ -22,9 +24,14 @@ func TestDeliveriesCountOnlyAttemptOutcomes(t *testing.T) {
 			t.Fatal(state)
 		}
 	}
-	for _, state := range []string{"", "publication-idle", "publication-quarantined", "publication-reconciled", "merge-quarantined", "merge-reconciled", "merge-waiting-for-checks", "merge-authority-denied"} {
+	for _, state := range []string{"", "publication-idle", "publication-quarantined", "publication-reconciled", "merge-quarantined", "merge-reconciled", "merge-waiting-for-checks", "merge-waiting-for-review-threads", "merge-authority-denied"} {
 		if deliveryOutcome(state) != "" {
 			t.Fatal("standing state counted", state)
+		}
+	}
+	for _, state := range mergeflow.WaitStates() {
+		if deliveryOutcome(state) != "" {
+			t.Fatal("wait counted as a delivery", state)
 		}
 	}
 	for _, outcome := range metrics.DeliveryOutcomes {
@@ -53,5 +60,52 @@ func TestMergeStopLineNamesTheStage(t *testing.T) {
 		if got := mergeStopLine(c.state, c.err); got != c.want {
 			t.Errorf("mergeStopLine(%q) = %q, want %q", c.state, got, c.want)
 		}
+	}
+}
+
+// A wait names the pull request, every blocker and the thread count; nothing
+// else is echoed, and a state that is not the reported wait adds nothing.
+func TestMergeStateLineNamesTheBlockers(t *testing.T) {
+	threads := &mergeflow.Wait{State: "merge-waiting-for-review-threads", PullRequest: 11, Reasons: []string{"review-threads-unresolved", "native-merge-not-ready"}, UnresolvedThreads: 1}
+	for _, c := range []struct {
+		state string
+		wait  *mergeflow.Wait
+		want  string
+	}{
+		{"merge-waiting-for-review-threads", threads, "merge reconciliation: merge-waiting-for-review-threads pull_request=11 reasons=review-threads-unresolved,native-merge-not-ready unresolved_threads=1"},
+		{"merge-waiting-for-checks", &mergeflow.Wait{State: "merge-waiting-for-checks", PullRequest: 7, Reasons: []string{"checks-not-passed"}}, "merge reconciliation: merge-waiting-for-checks pull_request=7 reasons=checks-not-passed"},
+		{"merge-reconciled", nil, "merge reconciliation: merge-reconciled"},
+		{"merge-complete", threads, "merge reconciliation: merge-complete"},
+	} {
+		if got := mergeStateLine(c.state, c.wait); got != c.want {
+			t.Errorf("mergeStateLine(%q) = %q, want %q", c.state, got, c.want)
+		}
+	}
+	if strings.Join(metrics.MergeWaitReasons, ",") != strings.Join(mergegate.Reasons, ",") {
+		t.Fatal("metric reasons differ from the gate's", metrics.MergeWaitReasons)
+	}
+	sampleMergeWait(threads, nil)
+	if v, _ := metrics.Default.Sample("ai_sdlc_merge_waiting", "review-threads-unresolved"); v != 1 {
+		t.Fatal("thread blocker not sampled", v)
+	}
+	if v, _ := metrics.Default.Sample("ai_sdlc_merge_waiting", "checks-not-passed"); v != 0 {
+		t.Fatal("absent blocker sampled", v)
+	}
+	if v, _ := metrics.Default.Sample("ai_sdlc_merge_unresolved_review_threads"); v != 1 {
+		t.Fatal("thread count not sampled", v)
+	}
+	sampleMergeWait(nil, nil)
+	if v, _ := metrics.Default.Sample("ai_sdlc_merge_unresolved_review_threads"); v != 0 {
+		t.Fatal("a finished wait kept its count", v)
+	}
+	if v, _ := metrics.Default.Sample("ai_sdlc_merge_waiting", "review-threads-unresolved"); v != 0 {
+		t.Fatal("a finished wait kept its blocker", v)
+	}
+	sampleMergeWait(nil, mergeflow.ErrMerge)
+	if _, ok := metrics.Default.Sample("ai_sdlc_merge_unresolved_review_threads"); ok {
+		t.Fatal("a stopped poll kept a thread count")
+	}
+	if _, ok := metrics.Default.Sample("ai_sdlc_merge_waiting", "checks-not-passed"); ok {
+		t.Fatal("a stopped poll kept a blocker")
 	}
 }
