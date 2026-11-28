@@ -141,7 +141,9 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual((report['pidsLimit'], report['changed']), (8192, True))
         again = kind_nodes.apply(node.run, 'podman', 'c', 'c-control-plane', self.WANT)
         self.assertFalse(again['changed'])
-        self.assertEqual(len(node.updates()), 1, 'reapplication changes nothing')
+        # The pid limit is always rewritten: podman nests the node cgroup and
+        # an update sets both levels; it is idempotent.
+        self.assertEqual(node.updates()[-1], ['podman', 'update', '--pids-limit', '8192', 'c-control-plane'])
 
     def test_docker_nodes_without_a_limit_get_one(self):
         node = FakeNode(pids=None)
@@ -161,6 +163,15 @@ class ApplyTests(unittest.TestCase):
                                           dict(self.WANT, pidsLimitExplicit=False))['pidsLimit'], 8192)
         explicit = FakeNode(pids=12288)
         self.assertEqual(kind_nodes.apply(explicit.run, 'podman', 'c', 'c-control-plane', self.WANT)['pidsLimit'], 8192)
+
+    def test_live_drift_above_the_target_needs_headroom(self):
+        # Stored configuration already at the target, live cgroup unlimited.
+        busy = FakeNode(pids=8192, live='max', used=7500)
+        with self.assertRaisesRegex(ValueError, 'refusing to lower'):
+            kind_nodes.apply(busy.run, 'podman', 'c', 'c-control-plane', self.WANT)
+        self.assertEqual(busy.updates(), [])
+        idle = FakeNode(pids=8192, live='16384', used=500)
+        self.assertTrue(kind_nodes.apply(idle.run, 'podman', 'c', 'c-control-plane', self.WANT)['changed'])
 
     def test_live_drift_is_applied_again(self):
         node = FakeNode(pids=8192, live='2048')
@@ -208,7 +219,8 @@ class ApplyTests(unittest.TestCase):
             node.names = ['c-control-plane', 'c-worker', 'c-worker2']
             reports = kind_nodes.apply_cluster(node.run, 'podman', 'c', 'kind', {}, self.WANT, cgroup_root=Path(root))
             self.assertEqual([r['node'] for r in reports], ['c-control-plane', 'c-worker', 'c-worker2'])
-            self.assertEqual([u[-1] for u in node.updates()], ['c-control-plane'], 'one shared fake: only the first changed')
+            self.assertEqual([r['changed'] for r in reports], [True, False, False], 'one shared fake: only the first changed')
+            self.assertEqual([u[-1] for u in node.updates()], ['c-control-plane', 'c-worker', 'c-worker2'])
             self.assertEqual(sum(1 for c in node.calls if c[1] == 'inspect'), 6, 'every node inspected and verified')
 
     def test_cgroup_v1_hosts_are_refused_before_any_update(self):
@@ -335,7 +347,7 @@ class InstallerWiringTests(unittest.TestCase):
     class Reached(Exception):
         pass
 
-    def drive(self, argv, installed_candidate=0, runtime_class=False):
+    def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192):
         import os
         import subprocess
         import offline_runtime
@@ -352,11 +364,12 @@ class InstallerWiringTests(unittest.TestCase):
             if argv_[:3] == ['kind', 'get', 'nodes']:
                 return subprocess.CompletedProcess(argv_, 0, 'c-control-plane\n')
             if argv_[:2] == ['podman', 'inspect'] and 'HostConfig' in argv_[3]:
-                return subprocess.CompletedProcess(argv_, 0, '{"PidsLimit": 8192}|' + json.dumps(
+                return subprocess.CompletedProcess(argv_, 0, json.dumps({'PidsLimit': node_limit}) + '|' + json.dumps(
                     {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': 'control-plane'}))
             if 'resourcequota' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'items': [
-                    {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}}}]}))
+                    {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}}},
+                    {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': str(installed_fetch)}}}]}))
             if 'runtimeclass' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, 'runtimeclass.node.k8s.io/ai-sdlc-offline\n' if runtime_class else '')
             return subprocess.CompletedProcess(argv_, 0, '')
@@ -394,6 +407,20 @@ class InstallerWiringTests(unittest.TestCase):
             self.drive(['local', '--node-pids-limit', '4096'], installed_candidate=6)
         with self.assertRaises(self.Reached):
             self.drive(['local', '--node-pids-limit', '4096'], installed_candidate=0)
+        with self.assertRaisesRegex(ValueError, 'cannot hold'):
+            self.drive(['local', '--node-pids-limit', '4096'], installed_fetch=6)
+
+    def test_the_budget_uses_the_larger_limit_a_default_keeps(self):
+        # After --node-pids-limit 16384 with ten candidates, a plain run keeps
+        # 16384 and must not be refused against the 8192 default.
+        with self.assertRaises(self.Reached):
+            self.drive(['local'], installed_candidate=10, node_limit=16384)
+        with self.assertRaises(self.Reached):
+            self.drive(['sandbox'], installed_candidate=10, node_limit=16384)
+        with self.assertRaisesRegex(ValueError, 'limit 8192 cannot hold'):
+            self.drive(['local'], installed_candidate=10, node_limit=4096)
+        with self.assertRaisesRegex(ValueError, 'limit 8192 cannot hold'):
+            self.drive(['local', '--node-pids-limit', '8192'], installed_candidate=10, node_limit=16384)
 
     def test_a_verification_run_counts_for_sandbox_and_an_installed_runtime(self):
         # 1100 + 3 x 768 = 3404 > 3000.

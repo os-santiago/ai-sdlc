@@ -559,7 +559,7 @@ def _main(argv, stack):
     if args.workers is not None and (args.platform != 'kind' or args.command not in ('plan', 'local', 'sandbox')):
         raise ValueError('--workers requires plan, local or sandbox on the kind platform')
 
-    def capacity(workers, installed=None, sandboxed=None):
+    def capacity(workers, installed=None, sandboxed=None, limit=None):
         # Quotas default to one CI pod of each kind per sandbox node. The
         # nodes must hold their baseline, one verification run when sandboxed
         # execution is installed, and every CI pod the requested or installed
@@ -567,7 +567,7 @@ def _main(argv, stack):
         quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods,
                                               workers) if args.tekton_ci else None
         installed = installed or {'candidate': 0, 'fetch': 0}
-        budget = kind_nodes.pid_budget(node_resources['pidsLimit'],
+        budget = kind_nodes.pid_budget(limit or node_resources['pidsLimit'],
                                        sandbox=args.profile in ('candidate', 'verification') if sandboxed is None else sandboxed,
                                        candidate_pods=max(installed['candidate'], (quotas or {}).get('candidate', 0)),
                                        fetch_pods=max(installed['fetch'], (quotas or {}).get('fetch', 0)), workers=workers)
@@ -806,7 +806,11 @@ def _main(argv, stack):
         sandboxed = (args.command == 'sandbox' or args.profile in ('candidate', 'verification') or bool(run(
             kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '--ignore-not-found', '-o', 'name'],
             capture_output=True).stdout.strip()))
-        quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed)
+        # A default keeps a larger limit already on a node: budget against
+        # the smallest limit the nodes will actually have.
+        limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources,
+                                           [nodes['controlPlane']] + nodes['workers'])
+        quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed, limit)
         if args.command == 'local':
             tekton_quotas = quotas
         # Set on creation and reconciled on every later install: podman's
