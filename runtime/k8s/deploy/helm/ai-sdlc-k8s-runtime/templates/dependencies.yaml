@@ -140,7 +140,9 @@ data:
       uwsgi_temp_path /tmp/uwsgi;
       scgi_temp_path /tmp/scgi;
       client_max_body_size 0;
-      # Released artifacts and tarballs are immutable: cached for ten years.
+      # Released artifacts and tarballs are immutable: cached for ten years,
+      # keyed by the upstream too, so changing a host never serves the old
+      # host's entries.
       # Metadata (maven-metadata.xml, npm packuments) is cached ten minutes.
       # max_size keeps a tenth of the claim free for temporary files and the
       # file system's own use.
@@ -179,7 +181,7 @@ data:
           include /etc/nginx/ai-sdlc/maven-request.conf;
           proxy_pass $upstream$uri;
           proxy_cache dependencies;
-          proxy_cache_key "maven$uri";
+          proxy_cache_key "maven$upstream$uri";
           proxy_cache_valid 200 3650d;
           proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
@@ -188,7 +190,7 @@ data:
             include /etc/nginx/ai-sdlc/maven-request.conf;
             proxy_pass $upstream$uri;
             proxy_cache dependencies;
-            proxy_cache_key "maven$uri";
+            proxy_cache_key "maven$upstream$uri";
             proxy_cache_valid 200 10m;
             proxy_cache_valid 404 1m;
           }
@@ -235,7 +237,7 @@ data:
           include /etc/nginx/ai-sdlc/npm-request.conf;
           proxy_pass $upstream$uri;
           proxy_cache dependencies;
-          proxy_cache_key "npm$uri";
+          proxy_cache_key "npm$upstream$uri";
           proxy_cache_valid 200 3650d;
           proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
@@ -251,7 +253,7 @@ data:
           include /etc/nginx/ai-sdlc/npm-request.conf;
           proxy_pass $upstream$uri;
           proxy_cache dependencies;
-          proxy_cache_key "npm$uri|$http_accept";
+          proxy_cache_key "npm$upstream$uri|$http_accept";
           proxy_cache_valid 200 10m;
           proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
@@ -312,7 +314,13 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
+      {{- if $.Values.openshift.enabled }}
+      # restricted-v2 assigns the UID and fsGroup from the namespace range;
+      # the unprivileged nginx image runs under an arbitrary UID.
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      {{- else }}
       securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      {{- end }}
       containers:
         - name: proxy
           image: {{ .image }}

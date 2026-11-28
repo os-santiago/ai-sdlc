@@ -568,8 +568,10 @@ def _main(argv, stack):
     dependency_proxy = None
     if args.dependency_proxy is not None:
         import dependency_proxy_install
-        if args.command not in ('plan', 'local'):
-            raise ValueError('--dependency-proxy requires plan or local')
+        if args.command not in ('plan', 'local') or args.configure_prepared:
+            # The prepared transition renders from its durable intent, which
+            # does not record the proxy; refuse rather than silently omit it.
+            raise ValueError('--dependency-proxy requires plan or local without --configure-prepared')
         dependency_proxy = dependency_proxy_install.values(dependency_proxy_install.parse(args.dependency_proxy))
     if args.console_images is not None and not args.flow_console:
         raise ValueError('--console-images requires --flow-console')

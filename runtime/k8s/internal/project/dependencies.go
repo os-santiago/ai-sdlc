@@ -75,7 +75,9 @@ func validCachePath(p string) error {
 		return ErrManifest
 	}
 	for _, excluded := range dependencyExcluded {
-		if p == excluded || strings.HasPrefix(p, excluded+"/") {
+		// The cache may not hide an excluded directory either: /usr would
+		// shadow /usr/bin and /usr/lib.
+		if p == excluded || strings.HasPrefix(p, excluded+"/") || strings.HasPrefix(excluded, p+"/") {
 			return ErrManifest
 		}
 	}

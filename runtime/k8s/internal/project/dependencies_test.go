@@ -59,6 +59,8 @@ func TestInvalidDependenciesSectionsAreRefused(t *testing.T) {
 		"identity cache":  func(d *Dependencies) { d.CachePath = "/var/run/ai-sdlc/pod" },
 		"binary cache":    func(d *Dependencies) { d.CachePath = "/usr/bin" },
 		"library cache":   func(d *Dependencies) { d.CachePath = "/usr/lib/jvm" },
+		"usr cache":       func(d *Dependencies) { d.CachePath = "/usr" },
+		"var cache":       func(d *Dependencies) { d.CachePath = "/var" },
 		"traversal cache": func(d *Dependencies) { d.CachePath = "/deps/../tmp" },
 		"trailing slash":  func(d *Dependencies) { d.CachePath = "/deps/" },
 		"deep cache":      func(d *Dependencies) { d.CachePath = strings.Repeat("/d", 17) },

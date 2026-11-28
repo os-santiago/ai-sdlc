@@ -799,6 +799,14 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertIn('if ($bodied_read) { return 403; }', data['request-filter.conf'])
         self.assertIn('"~^(GET|HEAD):.+" 1;', config)
         self.assertIn('max_size=18432m', config)
+        self.assertEqual(config.count('proxy_cache_key "maven$upstream$uri";'), 2)
+        self.assertIn('proxy_cache_key "npm$upstream$uri";', config)
+        self.assertIn('proxy_cache_key "npm$upstream$uri|$http_accept";', config)
+        self.assertEqual(pod['securityContext']['runAsUser'], 101)
+        openshift = {d['kind'] + '/' + d['metadata']['name']: d for d in docs(
+            '--set', 'dependencyProxy.enabled=true', '--set', 'openshift.enabled=true')}
+        self.assertEqual(openshift['Deployment/dependency-proxy']['spec']['template']['spec']['securityContext'],
+                         {'runAsNonRoot': True, 'seccompProfile': {'type': 'RuntimeDefault'}})
         container = pod['containers'][0]
         self.assertEqual(container['args'][:3], ['nginx', '-c', '/etc/nginx/ai-sdlc/nginx.conf'])
         self.assertIn({'name': 'NGINX_ENTRYPOINT_LOCAL_RESOLVERS', 'value': '1'}, container['env'])

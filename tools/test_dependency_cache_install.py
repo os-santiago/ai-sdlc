@@ -119,7 +119,7 @@ class FakeCluster:
 
     def __init__(self, reclaim='Delete'):
         self.calls, self.pods, self.bind = [], [], True
-        self.claims, self.volumes = {}, {'pv-1': {'metadata': {'name': 'pv-1', 'annotations': {}}, 'status': {'phase': 'Available'},
+        self.claims, self.volumes = {}, {'pv-1': {'metadata': {'name': 'pv-1', 'annotations': {}, 'resourceVersion': '1'}, 'status': {'phase': 'Available'},
                                                   'spec': {'accessModes': ['ReadWriteOnce'], 'storageClassName': 'standard',
                                                            'capacity': {'storage': '8Gi'}, 'persistentVolumeReclaimPolicy': reclaim}}}
         self.mutations, self.fail_at, self.fail_after = 0, None, False
@@ -177,8 +177,17 @@ class FakeCluster:
         elif command[:2] == ['patch', 'pv']:
             volume, patch = self.volumes[command[2]], json.loads(command[-1])
             if isinstance(patch, list):
-                volume['spec']['claimRef'] = patch[0]['value']
-                volume['status']['phase'] = 'Available'
+                for op in patch:
+                    if op['op'] == 'test' and volume['metadata']['resourceVersion'] != op['value']:
+                        return SimpleNamespace(returncode=1, stdout=b'')
+                for op in patch:
+                    if op['path'] == '/spec/claimRef':
+                        volume['spec']['claimRef'] = op['value']
+                        volume['status']['phase'] = 'Available'
+                    elif op['path'] == '/metadata/annotations':
+                        volume['metadata']['annotations'] = dict(op['value'])
+                    elif op['path'] == '/spec/persistentVolumeReclaimPolicy':
+                        volume['spec']['persistentVolumeReclaimPolicy'] = op['value']
             else:
                 for key, value in patch.get('metadata', {}).get('annotations', {}).items():
                     if value is None:
@@ -186,6 +195,7 @@ class FakeCluster:
                     else:
                         volume['metadata']['annotations'][key] = value
                 volume['spec'].update(patch.get('spec', {}))
+            volume['metadata']['resourceVersion'] = str(int(volume['metadata']['resourceVersion']) + 1)
         self.reconcile()
         if fail:
             raise subprocess.CalledProcessError(1, args)
@@ -256,6 +266,38 @@ class SealTests(unittest.TestCase):
         self.fake.bind = True
         deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
         self.assert_sealed('Delete')
+
+    def test_a_concurrent_seal_cannot_record_retain_as_the_original(self):
+        cluster = self.cluster()
+        deps.prepare(cluster, GO_VECTOR)
+        self.fake.reconcile()
+        real = self.fake.run
+        raced = []
+        def racing(args, **kwargs):
+            command = args[4:]
+            if command[:2] == ['patch', 'pv'] and '"test"' in command[-1] and not raced:
+                # Another seal retains the volume between this run's read and patch.
+                raced.append(True)
+                volume = self.fake.volumes['pv-1']
+                volume['metadata']['annotations'] = {deps.KEY_ANNOTATION: GO_VECTOR, deps.RECLAIM_ANNOTATION: 'Delete'}
+                volume['spec']['persistentVolumeReclaimPolicy'] = 'Retain'
+                volume['metadata']['resourceVersion'] = str(int(volume['metadata']['resourceVersion']) + 1)
+            return real(args, **kwargs)
+        self.fake.run = racing
+        cluster = deps.Cluster(racing, 'kind-test')
+        deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
+        self.assertTrue(raced)
+        self.assert_sealed('Delete')
+
+    def test_an_unreadable_volume_is_not_reported_as_sealed(self):
+        cluster = self.cluster()
+        deps.prepare(cluster, GO_VECTOR)
+        deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
+        self.fake.volumes['pv-1']['metadata']['annotations'][deps.RECLAIM_ANNOTATION] = 'Delete'
+        hidden = self.fake.volumes.pop('pv-1')
+        with self.assertRaisesRegex(RuntimeError, 'Could not read volume'):
+            deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
+        self.fake.volumes['pv-1'] = hidden
 
     def test_a_foreign_sealed_claim_is_refused(self):
         cluster = self.cluster()

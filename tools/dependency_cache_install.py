@@ -220,6 +220,30 @@ def handed_volume(cluster, key):
     return found[0] if found else None
 
 
+def retain(cluster, volume_name, key, attempts=5):
+    """Record the key and the original reclaim policy and retain the volume
+    in one patch that applies only to the version just read. A concurrent
+    seal that got there first is detected on reread, so the recorded policy
+    is always the volume's original one and deleting the work claim can never
+    delete the cache."""
+    for _ in range(attempts):
+        volume = cluster.get('pv', volume_name)
+        if not volume:
+            raise RuntimeError('The work claim volume is missing')
+        annotations = dict(volume['metadata'].get('annotations') or {})
+        if annotations.get(KEY_ANNOTATION) == key and annotations.get(RECLAIM_ANNOTATION):
+            return volume
+        if annotations.get(KEY_ANNOTATION) or annotations.get(RECLAIM_ANNOTATION):
+            raise RuntimeError('Volume %s carries another seal' % volume_name)
+        annotations.update({KEY_ANNOTATION: key, RECLAIM_ANNOTATION: volume['spec'].get('persistentVolumeReclaimPolicy', 'Delete')})
+        patch = [{'op': 'test', 'path': '/metadata/resourceVersion', 'value': volume['metadata']['resourceVersion']},
+                 {'op': 'add', 'path': '/metadata/annotations', 'value': annotations},
+                 {'op': 'replace', 'path': '/spec/persistentVolumeReclaimPolicy', 'value': 'Retain'}]
+        if cluster.kubectl('patch', 'pv', volume_name, '--type', 'json', '-p', json.dumps(patch), check=False).returncode == 0:
+            return cluster.get('pv', volume_name) or volume
+    raise RuntimeError('Volume %s kept changing; rerun seal' % volume_name)
+
+
 def finish(cluster, key, volume_name, sleep):
     """Wait for the sealed claim to bind, check it, and restore the volume's
     original reclaim policy."""
@@ -231,7 +255,11 @@ def finish(cluster, key, volume_name, sleep):
             or claim['spec'].get('volumeName') != volume_name):
         raise RuntimeError('The claim %s/%s is not the sealed cache of this key' % (VERIFIER_NAMESPACE, name))
     volume = cluster.get('pv', volume_name)
-    annotations = (volume or {}).get('metadata', {}).get('annotations', {})
+    if volume is None:
+        # Without a confirmed read the original policy may still be pending;
+        # fail so a rerun finishes the restoration.
+        raise RuntimeError('Could not read volume %s; rerun seal to finish' % volume_name)
+    annotations = volume.get('metadata', {}).get('annotations') or {}
     if RECLAIM_ANNOTATION in annotations or KEY_ANNOTATION in annotations:
         # Restore the original policy and drop the seal's markers, so a volume
         # that later outlives its claim (an original Retain) is never taken
@@ -273,15 +301,7 @@ def seal(cluster, key, namespace=CI_NAMESPACE, sleep=time.sleep):
     elif volume is None:
         raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
     if volume is None:
-        volume = cluster.get('pv', work['spec']['volumeName'])
-        if not volume:
-            raise RuntimeError('The work claim volume is missing')
-        original = volume['spec'].get('persistentVolumeReclaimPolicy', 'Delete')
-        # One patch records the key and the original policy and retains the
-        # volume, so deleting the work claim can never delete the cache.
-        cluster.kubectl('patch', 'pv', volume['metadata']['name'], '--type', 'merge', '-p', json.dumps({
-            'metadata': {'annotations': {KEY_ANNOTATION: key, RECLAIM_ANNOTATION: original}},
-            'spec': {'persistentVolumeReclaimPolicy': 'Retain'}}))
+        volume = retain(cluster, work['spec']['volumeName'], key)
     volume_name = volume['metadata']['name']
     if cluster.get('pvc', name, namespace):
         cluster.kubectl('delete', 'pvc', name, '-n', namespace, '--wait=false')

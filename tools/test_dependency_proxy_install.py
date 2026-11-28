@@ -42,7 +42,8 @@ class DependencyProxyInstallTests(unittest.TestCase):
                 self.assertEqual(installer.main(['plan', '--images', str(path), '--dependency-proxy', 'maven,npm']), 0)
                 self.assertEqual(rendered[-1], dict(default, dependencyProxy={'enabled': True, 'maven': {'enabled': True}, 'npm': {'enabled': True}}))
             self.assertNotIn('dependencyProxy', default)
-        for args in (['status', '--dependency-proxy', 'maven'], ['plan', '--dependency-proxy', 'gradle']):
+        for args in (['status', '--dependency-proxy', 'maven'], ['plan', '--dependency-proxy', 'gradle'],
+                     ['local', '--configure-prepared', '--dependency-proxy', 'maven']):
             with self.subTest(args=args), patch.object(installer, 'tools') as tools:
                 with self.assertRaises((ValueError, SystemExit)):
                     installer.main(args)
