@@ -383,6 +383,13 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'release_stale_assistants', return_value=[]), \
              patch.object(tekton, 'observe', return_value={'ready': True, 'release': lock['release']}):
             report = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['os-santiago/quarkus-super-heroes'])
+            self.assertNotIn('shared', calls)
+            with patch.object(tekton, 'shared_placement', side_effect=lambda items: calls.append('shared') or items):
+                shared = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['a/b'],
+                                        cache_storage_class='ai-sdlc-shared')
+            self.assertIn('shared', calls, 'shared caches admit only the sandbox-worker placement')
+            self.assertEqual(shared['cacheStorageClass'], 'ai-sdlc-shared')
+            del calls[calls.index('verify', 1):]
         self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects',
                                  ('quotas', {'candidate': 1, 'fetch': 1}), 'own',
                                  ('apply', 'namespace'), 'admission', ('apply', 'ci')])

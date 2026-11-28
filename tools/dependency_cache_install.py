@@ -344,10 +344,16 @@ def seal(cluster, key, namespace=CI_NAMESPACE, sleep=time.sleep):
                 or (volume is not None and work['spec'].get('volumeName') != volume['metadata']['name'])):
             raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
         pods = json.loads(cluster.kubectl('get', 'pods', '-n', namespace, '-o', 'json').stdout).get('items', [])
-        if any(v.get('persistentVolumeClaim', {}).get('claimName') == name
-               for p in pods if p.get('status', {}).get('phase') not in ('Succeeded', 'Failed')
-               for v in p.get('spec', {}).get('volumes', [])):
+        mounting = [p for p in pods if any(v.get('persistentVolumeClaim', {}).get('claimName') == name
+                                           for v in p.get('spec', {}).get('volumes', []))]
+        if any(p.get('status', {}).get('phase') not in ('Succeeded', 'Failed') for p in mounting):
             raise RuntimeError('A pod still uses %s; seal it after the dependency task has finished' % name)
+        if mounting:
+            # PVC protection keeps a claim that a finished pod still
+            # references from being deleted, so the hand-over would hang.
+            raise RuntimeError('Finished pods still reference %s (%s); delete them (for a Tekton run, delete its '
+                               'PipelineRun) and rerun seal'
+                               % (name, ', '.join(sorted(p.get('metadata', {}).get('name', '?') for p in mounting))))
     elif volume is None:
         raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
     require_sandbox_node(cluster, volume or cluster.get('pv', work['spec']['volumeName']) or {})

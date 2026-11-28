@@ -144,11 +144,14 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0, 
                   'workerBaseline': budget['workerBaseline'], 'podPidsLimit': pod, 'workers': workers,
                   'workerPodCapacity': capacity, 'workerMaxPods': max_pods(limit), 'sandboxPods': sandbox_pods,
                   'candidatePods': candidate_pods, 'fetchPods': fetch_pods, 'requiredPods': required}
-        report['sharedStorage'] = shared
         if shared:
+            report['sharedStorage'] = True
             # ReadWriteMany caches: CI and verification pods spread over every
             # worker; each worker's maxPods still caps it at its pid limit.
-            if budget['nodeBaseline'] > limit or capacity < 1 or required > workers * capacity:
+            # A sealed dependency cache may still be node-local (ReadWriteOnce),
+            # which puts one verification run on one worker.
+            if (budget['nodeBaseline'] > limit or capacity < max(1, sandbox_pods)
+                    or required > workers * capacity):
                 raise ValueError('%d workers with a pid limit of %d hold %d pods (%d each); one verification run and '
                                  'the Tekton CI pod quotas (installed or requested) need %d; raise --node-pids-limit '
                                  'or lower the quotas, quotas first when lowering both'

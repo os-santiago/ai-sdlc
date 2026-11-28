@@ -1,4 +1,5 @@
 import json
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -136,6 +137,65 @@ class SharedStorageTests(unittest.TestCase):
              self.assertRaisesRegex(ValueError, 'needs workers'):
             install.main(['local', '--shared-storage', '--cluster', 'c', '--provider', 'podman'])
         self.assertFalse(any(c[:3] == ['kind', 'create', 'cluster'] for c in calls))
+
+
+    def test_the_default_policy_keeps_mains_bytes(self):
+        main = subprocess.run(['git', 'show', 'origin/main:runtime/k8s/deploy/tekton-ci/ci/admission-policy.yaml'],
+                              cwd=tekton.ROOT, capture_output=True)
+        if main.returncode:
+            self.skipTest('origin/main is not available')
+        self.assertEqual((tekton.CI_DIR / 'admission-policy.yaml').read_bytes(), main.stdout)
+
+    def test_the_host_directory_is_0700_and_repaired(self):
+        import os
+        import stat
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'shared'
+            self.assertFalse(shared_storage.ensure_host_dir(path)['repaired'])
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            path.chmod(0o755)
+            self.assertTrue(shared_storage.ensure_host_dir(path)['repaired'])
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            link = Path(root) / 'link'
+            link.symlink_to(path)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                shared_storage.ensure_host_dir(link)
+            (Path(root) / 'file').write_text('x')
+            with self.assertRaises(ValueError):
+                shared_storage.ensure_host_dir(Path(root) / 'file')
+
+    def test_storage_class_binds_at_once_and_deletes_with_its_claim(self):
+        value = shared_storage.storage_class()
+        self.assertEqual((value['volumeBindingMode'], value['reclaimPolicy'], value['provisioner']),
+                         ('Immediate', 'Delete', 'rancher.io/local-path'))
+
+    def test_shared_budget_bounds_every_worker(self):
+        # One verification run must still fit one worker (a sealed cache may be RWO).
+        with patch.object(kind_nodes, 'policy', return_value=dict(kind_nodes.policy(),
+                          pidBudget=dict(kind_nodes.policy()['pidBudget'], workerBaseline=400))):
+            with self.assertRaisesRegex(ValueError, 'hold'):
+                kind_nodes.pid_budget(3000, sandbox=True, candidate_pods=1, fetch_pods=1, workers=4, shared=True)
+        # The control-plane baseline must fit the limit too.
+        raised = dict(kind_nodes.policy(), pidBudget=dict(kind_nodes.policy()['pidBudget'], nodeBaseline=5000))
+        with patch.object(kind_nodes, 'policy', return_value=raised):
+            with self.assertRaises(ValueError):
+                kind_nodes.pid_budget(4096, sandbox=False, candidate_pods=1, fetch_pods=1, workers=2, shared=True)
+        report = kind_nodes.pid_budget(8192, workers=2, shared=True)
+        self.assertTrue(report['sharedStorage'])
+        self.assertNotIn('sharedStorage', kind_nodes.pid_budget(8192, workers=2), 'default output unchanged')
+
+    def test_plan_honours_shared_storage(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+             patch.object(install, 'run'), contextlib.redirect_stdout(out):
+            install.main(['plan', '--workers', '2', '--shared-storage', '--tekton-ci'])
+        plan = json.loads(out.getvalue())
+        self.assertEqual(plan['tektonCI']['podQuotas'], {'candidate': 2, 'fetch': 2})
+        self.assertTrue(plan['nodeResources']['pidBudget']['sharedStorage'])
 
 
 if __name__ == '__main__':

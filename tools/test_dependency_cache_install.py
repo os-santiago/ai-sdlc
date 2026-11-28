@@ -347,6 +347,11 @@ class SealTests(unittest.TestCase):
         cluster = self.cluster()
         deps.prepare(cluster, GO_VECTOR, access_mode='ReadWriteMany')
         self.assertEqual(self.fake.claims[('ai-sdlc-ci', 'deps-' + GO_VECTOR)]['spec']['accessModes'], ['ReadWriteMany'])
+        finished = [{'metadata': {'name': 'fill-pod'}, 'status': {'phase': 'Succeeded'},
+                     'spec': {'volumes': [{'persistentVolumeClaim': {'claimName': 'deps-' + GO_VECTOR}}]}}]
+        self.fake.pods = finished
+        with self.assertRaisesRegex(RuntimeError, 'Finished pods still reference .*fill-pod'):
+            deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
         self.fake.pods = [{'status': {'phase': 'Running'}, 'spec': {'volumes': [{'persistentVolumeClaim': {'claimName': 'deps-' + GO_VECTOR}}]}}]
         with self.assertRaisesRegex(RuntimeError, 'still uses'):
             deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)

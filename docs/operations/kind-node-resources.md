@@ -223,13 +223,17 @@ to any worker:
   `standard` class.
 - **Tekton CI.** The repository Maven caches are created as ReadWriteMany
   `ai-sdlc-shared` claims. Tekton's default pod template selects every
-  sandbox worker instead of one CI worker, and the CI admission policy admits
-  exactly that placement as well. A run's pods follow its node-local source
+  sandbox worker instead of one CI worker. The installer rewrites the one
+  admitted run-template placement of the CI admission policy to that
+  selector, so each mode admits only its own placement. The committed
+  policy, used without shared storage, is unchanged. A run's pods follow its node-local source
   claim to the worker where its checkout pod ran, and every worker can mount
   the cache, so concurrent runs spread over the workers. The candidate and
   fetch quotas default to one of each per worker. The pid budget checks one
-  verification run plus the quotas against all the workers together, while
-  each worker's kubelet `maxPods` still caps that worker at its own pid limit.
+  verification run plus the quotas against all the workers together. Each
+  worker must still hold one whole verification run (3 pods), because a
+  sealed cache may be node-local. Each worker's kubelet `maxPods` still caps
+  that worker at its own pid limit.
 - **Sealed dependency caches.** Create the work claim with
   `tools/dependency_cache_install.py prepare --storage-class ai-sdlc-shared
   --access-mode ReadWriteMany`. `seal` hands the volume over unchanged, and
@@ -246,8 +250,18 @@ to any worker:
   - On the host the caches are protected only by the 0700 directory, and the
     provisioner creates claim subdirectories world-writable inside it: do not
     loosen the parent directory's mode.
+  - Every run checks the mode again and repairs a loosened mode to 0700. It
+    refuses a symlink, another file type or another owner.
+  - Everything pods write lands in that directory as it is, including 0777
+    directories and symlinks such as `hostroot -> /`. Host tools (backup,
+    indexing, cleanup scripts) must not follow symlinks under it.
   - Deleting a claim deletes its subdirectory (reclaim policy Delete), except
     that a sealed cache keeps the policy `seal` restores.
+- **Cleanup.** The directory, and any sealed caches still in it, survives
+  `kind delete cluster`. Remove it once the cluster is gone, without
+  following symlinks: `rm -rf --one-file-system
+  ~/.local/state/ai-sdlc/<cluster>/shared`. `rm` never follows symlinks it
+  removes. Use `sudo` when pods wrote files as root.
 
 **Host services.** Pods reach the host through SNAT to their node's address,
 so a host service that allowlists client addresses (the local model service's

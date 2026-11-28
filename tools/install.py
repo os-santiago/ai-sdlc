@@ -791,10 +791,10 @@ def _main(argv, stack):
                 # kind.yaml plus the workers; written beside the kubeconfig.
                 shared_dir = None
                 if args.shared_storage:
+                    import shared_storage
                     # Only the installing user can reach the shared caches on the host.
                     shared_dir = state / 'shared'
-                    shared_dir.mkdir(mode=0o700, exist_ok=True)
-                    shared_dir.chmod(0o700)
+                    shared_storage.ensure_host_dir(shared_dir)
                 config = state / 'kind-cluster.yaml'
                 config.write_text(kind_nodes.cluster_config(args.workers, shared_dir))
             run([kind, 'create', 'cluster', '--name', args.cluster, '--config', config,
@@ -855,6 +855,9 @@ def _main(argv, stack):
         report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources, nodes)
         if nodes['shared']:
             import shared_storage
+            # Re-checked on every run: a loosened host directory is repaired.
+            print(json.dumps({'sharedStorageHostDirectory': shared_storage.ensure_host_dir(state / 'shared')}),
+                  file=sys.stderr)
             print(json.dumps({'sharedStorage': shared_storage.configure(run, kubectl, args.timeout)}), file=sys.stderr)
             kind_nodes.schedule(run, kubectl, nodes, shared=True)
         else:
@@ -1051,7 +1054,7 @@ def _main(argv, stack):
               **({'tektonCI': tekton_ci} if tekton_ci else {}),
               **({'nodeResources': {'nodes': node_report['nodes'], 'pidBudget': node_budget,
                                     'controlPlane': nodes['controlPlane'], 'workers': nodes['workers'],
-                                    'sharedStorage': nodes.get('shared', False),
+                                    **({'sharedStorage': True} if nodes.get('shared') else {}),
                                     'nodeAddresses': node_report['addresses']}} if node_report else {}),
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

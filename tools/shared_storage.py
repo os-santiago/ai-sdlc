@@ -26,6 +26,27 @@ DEPLOYMENT = 'local-path-provisioner'
 PROVISIONER = 'rancher.io/local-path'
 
 
+def ensure_host_dir(path):
+    """The shared host directory: a real directory of mode 0700 owned by
+    the installing user. A loosened mode is repaired; a symlink, another
+    file type or another owner is refused."""
+    import os
+    import stat
+    from pathlib import Path
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('The shared storage directory %s is a symlink; refusing it' % path)
+    if not path.exists():
+        path.mkdir(mode=0o700)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+        raise ValueError('The shared storage directory %s must be a directory owned by the installing user' % path)
+    repaired = stat.S_IMODE(info.st_mode) != 0o700
+    if repaired:
+        path.chmod(0o700)
+    return {'path': str(path), 'mode': '0700', 'repaired': repaired}
+
+
 def storage_class():
     return {'apiVersion': 'storage.k8s.io/v1', 'kind': 'StorageClass',
             'metadata': {'name': kind_nodes.SHARED_CLASS, 'labels': {'app.kubernetes.io/part-of': 'ai-sdlc'}},

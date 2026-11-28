@@ -228,6 +228,9 @@ pending.
 
 `seal` works as follows:
 - It refuses a claim with another key, and one that a running pod still uses.
+  It also refuses a claim that finished pods still reference, naming them,
+  because PVC protection would keep the work claim deleting until they are
+  gone. Delete them first; for a Tekton run, delete its PipelineRun.
 - It retains the volume, deletes the work claim, rebinds the volume
   (`claimRef`) to `ai-sdlc-verifiers/deps-<key>`, and creates that claim
   already labelled `sealed`. After the claim binds it checks the key, the

@@ -44,8 +44,7 @@ spec:
         (!has(object.spec.taskRunTemplate) || !has(object.spec.taskRunTemplate.podTemplate) ||
          (object.spec.taskRunTemplate.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName', 'nodeSelector', 'tolerations']) &&
           (!has(object.spec.taskRunTemplate.podTemplate.nodeSelector) ||
-           object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'} ||
-           object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/node-role': 'sandbox'}) &&
+           object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}) &&
           (!has(object.spec.taskRunTemplate.podTemplate.tolerations) ||
            object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true', 'effect': 'NoSchedule'}]) &&
           (!has(object.spec.taskRunTemplate.podTemplate.runtimeClassName) ||

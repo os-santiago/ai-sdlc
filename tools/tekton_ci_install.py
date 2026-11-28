@@ -427,6 +427,27 @@ def plan():
             'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
+CI_PLACEMENT = "nodeSelector == {'ai-sdlc.io/ci-node': 'true'}"
+SHARED_PLACEMENT = "nodeSelector == {'ai-sdlc.io/node-role': 'sandbox'}"
+
+
+def shared_placement(items):
+    """With shared (ReadWriteMany) caches the run template's placement is
+    every sandbox worker, not the CI worker: rewrite the one admitted
+    nodeSelector of the committed policy, so each mode admits only its own
+    placement and the committed (default) policy keeps its bytes."""
+    found = 0
+    for item in items:
+        if item['kind'] == 'ValidatingAdmissionPolicy' and item['metadata']['name'] == 'ai-sdlc-ci-pipelineruns':
+            for validation in item['spec']['validations']:
+                if CI_PLACEMENT in validation['expression']:
+                    found += validation['expression'].count(CI_PLACEMENT)
+                    validation['expression'] = validation['expression'].replace(CI_PLACEMENT, SHARED_PLACEMENT)
+    if found != 1:
+        raise ValueError('The CI admission policy must admit exactly one run-template placement')
+    return items
+
+
 def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None, pod_template=None, cache_storage_class=None):
     quotas = quotas or pod_quotas()
     lock, lock_digest = lockfile()
@@ -442,6 +463,8 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
     # Tekton kinds are only known to kubectl once the CRDs are established.
     ci = apply_pod_quotas(desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)) + claims,
                                      cluster_uid), quotas)
+    if cache_storage_class:
+        ci = shared_placement(ci)
     require_ownership(run, kubectl, ci, cluster_uid)
     # A server dry run cannot create the namespace its other objects need.
     apply(run, kubectl, [i for i in ci if i['kind'] == 'Namespace'])
@@ -459,6 +482,8 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
                 admissionAttempts=attempts, releasedAssistants=released, podQuotas=quotas,
                 **({'defaultPodTemplate': pod_template} if pod_template is not None else {}),
+                **({'cacheStorageClass': cache_storage_class, 'admittedPlacement': 'sandbox-workers'}
+                   if cache_storage_class else {}),
                 cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 
