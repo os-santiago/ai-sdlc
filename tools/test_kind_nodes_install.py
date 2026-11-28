@@ -356,13 +356,15 @@ class WorkerTopologyTests(unittest.TestCase):
             return {'spec': {'claimRef': {'namespace': namespace, 'name': claim}, 'nodeAffinity': {'required': {
                 'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [host]}]}]}}}}
 
-        def runner(items, labelled=(), runs=()):
+        def runner(items, labelled=(), runs=(), failure=None):
             def run(args, **_k):
                 if 'pv' in args:
-                    return SimpleNamespace(stdout=json.dumps({'items': items}))
+                    return SimpleNamespace(stdout=json.dumps({'items': items}), returncode=0)
                 if 'nodes' in args:
-                    return SimpleNamespace(stdout=''.join('node/' + n + '\n' for n in labelled))
-                return SimpleNamespace(stdout=json.dumps({'items': list(runs)}))
+                    return SimpleNamespace(stdout=''.join('node/' + n + '\n' for n in labelled), returncode=0)
+                if failure is not None:
+                    return SimpleNamespace(stdout='', stderr=failure, returncode=1)
+                return SimpleNamespace(stdout=json.dumps({'items': list(runs)}), returncode=0, stderr='')
             return run
         nodes = {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']}
         self.assertEqual(kind_nodes.ci_worker(runner([]), ['kubectl'], nodes), 'c-worker')
@@ -384,6 +386,12 @@ class WorkerTopologyTests(unittest.TestCase):
         self.assertEqual(kind_nodes.ci_worker(runner(cached, ['c-worker'], done), ['kubectl'], nodes), 'c-worker2')
         self.assertEqual(kind_nodes.ci_worker(runner(cached, ['c-worker2'], active), ['kubectl'], nodes), 'c-worker2',
                          'no move, no refusal')
+        # Tekton absent: no runs can be active. Any other listing failure refuses the move.
+        absent = 'error: the server doesn\'t have a resource type "pipelineruns"'
+        self.assertEqual(kind_nodes.ci_worker(runner(cached, ['c-worker'], failure=absent), ['kubectl'], nodes), 'c-worker2')
+        with self.assertRaisesRegex(ValueError, 'Cannot list'):
+            kind_nodes.ci_worker(runner(cached, ['c-worker'], failure='Unable to connect to the server: timeout'),
+                                 ['kubectl'], nodes)
 
     def test_network_probe_pods_carry_the_worker_placement(self):
         import network_probe

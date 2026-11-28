@@ -452,8 +452,16 @@ def ci_worker(run, kubectl, nodes):
     current = next((name for name in labelled if name in nodes['workers']), None)
     choice = next(iter(hosts)) if hosts else (current or nodes['workers'][0])
     if current and choice != current:
-        runs = _command(run, kubectl + ['get', 'pipelineruns.tekton.dev', '-n', 'ai-sdlc-ci', '--ignore-not-found',
-                                        '-o', 'json'], check=False).stdout
+        result = _command(run, kubectl + ['get', 'pipelineruns.tekton.dev', '-n', 'ai-sdlc-ci', '--ignore-not-found',
+                                          '-o', 'json'], check=False)
+        runs = result.stdout or ''
+        if result.returncode:
+            # Only an absent PipelineRun type (Tekton not installed) means no
+            # runs; any other failure leaves active runs possible.
+            if "doesn't have a resource type" not in (result.stderr or ''):
+                raise ValueError('Cannot list Tekton PipelineRuns to check for active CI runs; refusing to move the '
+                                 'CI worker from %s to %s' % (current, choice))
+            runs = ''
         active = [r['metadata']['name'] for r in (json.loads(runs) if runs.strip() else {}).get('items', [])
                   if not (r.get('status') or {}).get('completionTime')]
         if active:
