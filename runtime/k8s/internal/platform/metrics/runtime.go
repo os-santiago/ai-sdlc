@@ -91,10 +91,51 @@ var (
 		OneOf("outcome", MergeReconciliationOutcomes...))
 	mergeAttemptsExhausted = Default.NewCounter("ai_sdlc_merge_attempts_exhausted_total",
 		"Publications whose last allowed merge attempt stopped before any send; none is attempted again.")
+	mergeWaiting = Default.NewGauge("ai_sdlc_merge_waiting",
+		"1 for each gate blocker holding the published pull request the last merge poll observed, 0 otherwise.",
+		OneOf("reason", MergeWaitReasons...))
+	mergeUnresolvedThreads = Default.NewGauge("ai_sdlc_merge_unresolved_review_threads",
+		"Unresolved review threads on the published pull request the last merge poll observed waiting (0 when none).")
 	quarantined = Default.NewGauge("ai_sdlc_quarantined",
 		"1 while an unresolved uncertain effect quarantines a journal of the release manager, 0 when none does.",
 		OneOf("journal", QuarantineJournals...))
 )
+
+// MergeWaitReasons is the closed label set of merge gate blockers
+// (mergegate.Reasons).
+var MergeWaitReasons = []string{"native-protection-insufficient", "checks-not-passed", "review-changes-requested", "review-threads-unresolved", "native-merge-not-ready"}
+
+// MergeWaiting records the gate blockers of the published pull request the
+// last merge poll observed waiting: 1 for each reason present, 0 for the
+// others, and the count of unresolved review threads. Nil reasons record a
+// poll that found no waiting pull request. Reasons outside the closed set are
+// ignored.
+func MergeWaiting(reasons []string, unresolvedThreads int) {
+	present := map[string]bool{}
+	for _, r := range reasons {
+		present[r] = true
+	}
+	for _, r := range MergeWaitReasons {
+		v := 0.0
+		if present[r] {
+			v = 1
+		}
+		mergeWaiting.Set(v, r)
+	}
+	if unresolvedThreads < 0 || reasons == nil {
+		unresolvedThreads = 0
+	}
+	mergeUnresolvedThreads.Set(float64(unresolvedThreads))
+}
+
+// ForgetMergeWaiting drops the merge wait series when the merge poll could
+// not observe a gate, rather than leaving their last values.
+func ForgetMergeWaiting() {
+	for _, r := range MergeWaitReasons {
+		mergeWaiting.Delete(r)
+	}
+	mergeUnresolvedThreads.Delete()
+}
 
 // QuarantineJournals are the release manager journals an uncertain effect can
 // quarantine.

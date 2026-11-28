@@ -30,7 +30,7 @@ func (f mergeWriterFunc) Merge(c context.Context, e mergegate.Expected, n int, g
 	return f(c, e, n, g)
 }
 func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
-	for _, scenario := range []string{"success", "checks-pending", "changed-checks", "changed-profile", "revoked", "lost-write", "wrong-tree", "wrong-head", "issue-revoked", "wrong-profile", "expired-publication"} {
+	for _, scenario := range []string{"success", "checks-pending", "review-threads", "changed-checks", "changed-profile", "revoked", "lost-write", "wrong-tree", "wrong-head", "issue-revoked", "wrong-profile", "expired-publication"} {
 		t.Run(scenario, func(t *testing.T) {
 			var lifetime []time.Duration
 			if scenario == "expired-publication" {
@@ -67,6 +67,11 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 					o.Ready = false
 					o.Reasons = []string{"checks-not-passed"}
 				}
+				if scenario == "review-threads" {
+					o.Ready = false
+					o.Reasons = []string{"native-merge-not-ready", "review-threads-unresolved"}
+					o.UnresolvedThreads = 1
+				}
 				if scenario == "changed-checks" && observations > 1 {
 					o.ChecksSHA256 = strings.Repeat("d", 64)
 				}
@@ -98,7 +103,12 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 				}
 				return receipt, nil
 			})
+			var waits []mergeflow.Wait
+			r.Waiting = func(w mergeflow.Wait) { waits = append(waits, w) }
 			state, e := r.PollOnce(ctx)
+			if (scenario == "checks-pending" || scenario == "review-threads") != (len(waits) == 1) {
+				t.Fatal("wait report", scenario, waits)
+			}
 			if scenario == "success" || scenario == "expired-publication" {
 				if e != nil || state != "merge-complete" || writes != 1 {
 					t.Fatal(state, e, writes)
@@ -121,6 +131,19 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 				var n int
 				if f.Admin.Pool.QueryRow(`SELECT count(*) FROM merge_requests`).Scan(&n) != nil || n != 0 {
 					t.Fatal("CI wait acquired authority")
+				}
+			} else if scenario == "review-threads" {
+				// The only blocker is a review thread: the state names it, not CI.
+				if e != nil || state != "merge-waiting-for-review-threads" || writes != 0 {
+					t.Fatal(state, e, writes)
+				}
+				w := waits[0]
+				if w.State != state || w.PullRequest < 1 || strings.Join(w.Reasons, ",") != "review-threads-unresolved,native-merge-not-ready" || w.UnresolvedThreads != 1 {
+					t.Fatal("wait report", w)
+				}
+				var n int
+				if f.Admin.Pool.QueryRow(`SELECT count(*) FROM merge_requests`).Scan(&n) != nil || n != 0 {
+					t.Fatal("review wait acquired authority")
 				}
 			} else {
 				if e == nil {

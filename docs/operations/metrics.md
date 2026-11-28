@@ -50,6 +50,8 @@ credentials or error text.
 | `ai_sdlc_publication_reconciliations_total` | counter | `effect`, `outcome` | Each read-only reconciliation of an uncertain publication effect |
 | `ai_sdlc_merge_reconciliations_total` | counter | `outcome` | Each read-only reconciliation of an uncertain merge effect |
 | `ai_sdlc_merge_attempts_exhausted_total` | counter | none | Publications whose last allowed merge attempt stopped before any send (at most once each; see below) |
+| `ai_sdlc_merge_waiting` | gauge | `reason` | 1 for each gate blocker of the published pull request the last merge poll found waiting, 0 for the others |
+| `ai_sdlc_merge_unresolved_review_threads` | gauge | none | Unresolved review threads on that pull request (0 when none) |
 | `ai_sdlc_quarantined` | gauge | `journal` | Whether an uncertain effect quarantines the release manager's publication or merge journal, sampled each poll |
 
 ### Queue depth
@@ -195,6 +197,23 @@ three `not-sent` merge requests in the journal. Alert on increases:
 increase(ai_sdlc_merge_attempts_exhausted_total[1h]) > 0
 ```
 
+### Merge waits
+
+Each merge poll that selects a published pull request whose gate is not ready
+sets `ai_sdlc_merge_waiting{reason}` to 1 for every
+[gate reason](merge-controller.md#waiting-for-the-gate) present and 0 for the
+others: `native-protection-insufficient`, `checks-not-passed`,
+`review-changes-requested`, `review-threads-unresolved` and
+`native-merge-not-ready`. `ai_sdlc_merge_unresolved_review_threads` holds the
+pull request's unresolved review thread count. A poll that finds no waiting
+pull request sets every series to 0; a poll that stopped, or could not run
+because the merge credential or runtime is unavailable, removes them. ai-sdlc cannot resolve review threads, so a
+pull request held only by them needs a person:
+
+```promql
+min_over_time(ai_sdlc_merge_waiting{reason="review-threads-unresolved"}[30m]) == 1
+```
+
 ### Quarantine
 
 `ai_sdlc_quarantined{journal}` is `1` while an uncertain effect of a failed
@@ -214,8 +233,8 @@ max_over_time(ai_sdlc_quarantined{journal="merge"}[15m]) == 1
 
 Every label value is bounded twice:
 
-1. **Allowlists.** `component`, `loop`, `role`, `effect`, `outcome`, `journal`
-   and the queue `stage` accept only fixed values. The stop `stage` accepts only the output
+1. **Allowlists.** `component`, `loop`, `role`, `effect`, `outcome`, `journal`,
+   `reason` and the queue `stage` accept only fixed values. The stop `stage` accepts only the output
    of the diagnostic functions above, each of which returns a fixed constant
    or `unknown`.
 2. **Registry.** Any value outside its allowlist, or outside
@@ -234,6 +253,8 @@ Expected series per component:
 | `ai_sdlc_deliveries_total` | 4 | 4 |
 | `ai_sdlc_publication_reconciliations_total` | 20 | Fewer than 4 |
 | `ai_sdlc_merge_reconciliations_total` | 6 | Fewer than 3 |
+| `ai_sdlc_merge_waiting` | 5 | 5 (release manager only) |
+| `ai_sdlc_merge_unresolved_review_threads` | 1 | 1 (release manager only) |
 | `ai_sdlc_quarantined` | 2 | 2 (release manager only) |
 
 Counters reset when a process starts: use `rate()` and `increase()`. A

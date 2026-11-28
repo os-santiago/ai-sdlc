@@ -41,6 +41,69 @@ type Runtime struct {
 	// effect that quarantines merges by a read-only forge observation.
 	Reconciler *mergerecovery.Reconciler
 	Observer   mergerecovery.Observer
+	// Waiting, when set, receives the bounded blockers of a publication whose
+	// gate is not ready, so the caller can log and count them. It never
+	// carries forge text.
+	Waiting func(Wait)
+}
+
+// Wait describes a published pull request the gate holds. Reasons is the
+// sorted closed set of gate reasons (mergegate.Reasons); UnresolvedThreads is
+// the gate's count of unresolved review threads.
+type Wait struct {
+	State             string
+	PullRequest       int
+	Reasons           []string
+	UnresolvedThreads int
+}
+
+// waitStates maps each gate reason to the wait state that names it, in the
+// order a wait state is chosen when several blockers hold one pull request:
+// the first present reason names the state, and Wait.Reasons lists them all.
+// native-merge-not-ready comes last because the forge reports it for any of
+// the other blockers too.
+var waitStates = []struct{ reason, state string }{
+	{mergegate.ReasonNativeProtectionInsufficient, "merge-waiting-for-protection"},
+	{mergegate.ReasonChecksNotPassed, "merge-waiting-for-checks"},
+	{mergegate.ReasonChangesRequested, "merge-waiting-for-changes-requested"},
+	{mergegate.ReasonThreadsUnresolved, "merge-waiting-for-review-threads"},
+	{mergegate.ReasonNativeMergeNotReady, "merge-waiting-for-mergeability"},
+}
+
+// WaitStates is the closed set of states PollOnce returns for a gate that is
+// not ready. "merge-waiting" names a gate that is not ready without a known
+// reason.
+func WaitStates() []string {
+	out := []string{}
+	for _, w := range waitStates {
+		out = append(out, w.state)
+	}
+	return append(out, "merge-waiting")
+}
+
+// waitFor names the blockers of an observation that is not ready. Reasons
+// outside the closed set are dropped, so nothing else reaches a log.
+func waitFor(o mergegate.Observation) Wait {
+	present := map[string]bool{}
+	for _, reason := range o.Reasons {
+		present[reason] = true
+	}
+	w := Wait{State: "merge-waiting", PullRequest: o.Expected.PullRequest, Reasons: []string{}}
+	for _, known := range mergegate.Reasons {
+		if present[known] {
+			w.Reasons = append(w.Reasons, known)
+		}
+	}
+	for _, candidate := range waitStates {
+		if present[candidate.reason] {
+			w.State = candidate.state
+			break
+		}
+	}
+	if present[mergegate.ReasonThreadsUnresolved] && o.UnresolvedThreads > 0 && o.UnresolvedThreads <= 100 {
+		w.UnresolvedThreads = o.UnresolvedThreads
+	}
+	return w
 }
 
 func (r Runtime) journal() *store.MergeJournal {
@@ -56,7 +119,8 @@ func expected(c publication.Command, f store.PublishedRecord) (mergegate.Expecte
 }
 
 // gateChange names the first difference between the queued gate and its
-// pre-send re-observation, or "" when the fresh observation is the same ready
+// pre-send re-observation (for a gate no longer ready, its blocker in wait
+// state precedence), or "" when the fresh observation is the same ready
 // gate. Every name is a fixed constant.
 func gateChange(queued, current mergegate.Observation) string {
 	switch {
@@ -65,10 +129,14 @@ func gateChange(queued, current mergegate.Observation) string {
 	case current.MergeAuthorized:
 		return "gate-not-ready"
 	case !current.Ready || len(current.Reasons) != 0:
+		// The same precedence as the wait states names the real blocker.
+		present := map[string]bool{}
 		for _, reason := range current.Reasons {
-			switch reason {
-			case "native-merge-not-ready", "native-protection-insufficient", "checks-not-passed", "review-feedback-unresolved":
-				return "gate-" + reason
+			present[reason] = true
+		}
+		for _, w := range waitStates {
+			if present[w.reason] {
+				return "gate-" + w.reason
 			}
 		}
 		return "gate-not-ready"
@@ -115,7 +183,7 @@ var stopStages = map[string]bool{
 	"request": true, "claim": true, "publication-fence": true, "gate-policy": true, "gate-manifest": true,
 	"gate-unavailable": true, "gate-deadline": true, "gate-queued-invalid": true, "gate-not-ready": true,
 	"gate-native-merge-not-ready": true, "gate-native-protection-insufficient": true,
-	"gate-checks-not-passed": true, "gate-review-feedback-unresolved": true,
+	"gate-checks-not-passed": true, "gate-review-changes-requested": true, "gate-review-threads-unresolved": true,
 	"gate-changed-expected": true, "gate-changed-policy": true, "gate-changed-checks": true,
 	"gate-changed-reviews": true, "effect-intent": true, "transport-before-send": true,
 	// After the merge request may have been sent.
@@ -215,7 +283,11 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 			return "merge-observation-unavailable", ErrMerge
 		}
 		if !observed.Ready {
-			return "merge-waiting-for-checks", nil
+			wait := waitFor(observed)
+			if r.Waiting != nil {
+				r.Waiting(wait)
+			}
+			return wait.State, nil
 		}
 		current, currentFact, e := publicationflow.CurrentPublishedProof(ctx, r.DB, r.Policy, r.Review, publicationID)
 		if e != nil || current != c || currentFact.Digest() != fact.Digest() {

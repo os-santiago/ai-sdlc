@@ -34,6 +34,41 @@ expected PR/head/base/tree, request digest and merge receipt are still checked,
 as other post-effect stages bind only to their own durable request and receipt.
 The built-in references keep `Refs #N`, so their issues stay open after the merge.
 
+## Waiting for the gate
+
+A publication whose gate is not ready holds no lease and queues no request; the
+next poll observes it again. The gate reports each blocker as its own reason,
+and the release manager logs the pull request, every reason and, for review
+threads, their count:
+
+```text
+merge reconciliation: merge-waiting-for-review-threads pull_request=11 reasons=review-threads-unresolved,native-merge-not-ready unresolved_threads=1
+```
+
+| Gate reason | Wait state | Meaning |
+|---|---|---|
+| `native-protection-insufficient` | `merge-waiting-for-protection` | The dedicated ruleset has a bypass actor, non-strict checks, no thread resolution or a missing required check |
+| `checks-not-passed` | `merge-waiting-for-checks` | A check run or commit status on the head is pending or failed |
+| `review-changes-requested` | `merge-waiting-for-changes-requested` | A reviewer's latest review requests changes |
+| `review-threads-unresolved` | `merge-waiting-for-review-threads` | At least one review thread is unresolved (the ruleset requires resolution); `unresolved_threads` counts them |
+| `native-merge-not-ready` | `merge-waiting-for-mergeability` | The forge does not report the pull request mergeable and clean |
+
+When several reasons hold, the state names the first in table order and
+`reasons=` lists all of them in that order. `native-merge-not-ready` comes last
+because the forge also reports it for each of the other blockers. A reason
+outside this set is dropped, and a gate with no known reason logs
+`merge-waiting`. The release manager also records the blockers in
+`ai_sdlc_merge_waiting{reason}` and the count in
+`ai_sdlc_merge_unresolved_review_threads` (see
+[metrics](metrics.md#merge-waits)).
+
+ai-sdlc cannot answer or resolve a review thread today. A third-party reviewer,
+for example CodeRabbit, that opens a thread on a published pull request
+therefore holds it in `merge-waiting-for-review-threads` until someone resolves
+the thread on the forge. Selection takes the oldest waiting publication first,
+so such a pull request also delays later merges until it is resolved or
+closed.
+
 ## Stopping before the send
 
 A claimed run can stop before any merge request leaves: the request or claim is
@@ -53,7 +88,9 @@ consistency check refused), `gate-deadline` (the claim, capped by the 25-second
 gate lifetime, ended while the gate was being observed again),
 `gate-queued-invalid`, `gate-not-ready`, `gate-<reason>` for a closed set of gate
 reasons (`gate-native-merge-not-ready`, `gate-native-protection-insufficient`,
-`gate-checks-not-passed`, `gate-review-feedback-unresolved`),
+`gate-checks-not-passed`, `gate-review-changes-requested`,
+`gate-review-threads-unresolved`; when several hold, the first in the
+[wait table](#waiting-for-the-gate) order),
 `gate-changed-expected`, `gate-changed-policy`, `gate-changed-checks`,
 `gate-changed-reviews`, `effect-intent` and `transport-before-send`. After the
 request may have been sent the stage is `transport`, `sent-fence`, `acknowledge`

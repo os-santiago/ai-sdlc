@@ -275,6 +275,39 @@ func TestAuthenticatedGateBlocksIncompleteOrUnsafeEvidence(t *testing.T) {
 		})
 	}
 }
+
+// Each review blocker is its own reason: an unresolved thread is not a request
+// for changes, and the thread count travels with the observation.
+func TestAuthenticatedGateNamesEachReviewBlocker(t *testing.T) {
+	for mode, want := range map[string]struct {
+		reason  string
+		threads int
+	}{
+		"unresolved-thread": {ReasonThreadsUnresolved, 1},
+		"changes-requested": {ReasonChangesRequested, 0},
+	} {
+		t.Run(mode, func(t *testing.T) {
+			c, _ := fixtureAPI(t, mode)
+			r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
+			if e != nil || r.Ready || len(r.Reasons) != 1 || r.Reasons[0] != want.reason || r.UnresolvedThreads != want.threads {
+				t.Fatal("review blocker", r, e)
+			}
+		})
+	}
+	c, _ := fixtureAPI(t, "success")
+	r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
+	raw, _ := json.Marshal(r)
+	if e != nil || strings.Contains(string(raw), "unresolvedThreads") {
+		t.Fatal("a ready gate changed shape", string(raw), e)
+	}
+	known := map[string]bool{}
+	for _, reason := range Reasons {
+		known[reason] = true
+	}
+	if len(known) != 5 || !known[ReasonThreadsUnresolved] || !known[ReasonChangesRequested] {
+		t.Fatal("reason set", Reasons)
+	}
+}
 func TestAuthenticatedGateRejectsAmbiguityChangesAndTransport(t *testing.T) {
 	for _, mode := range []string{"changed-head", "changed-base", "late-head", "late-base", "late-protection", "wrong-tree", "cross-app-check", "late-check", "late-status", "late-review", "late-thread", "wrong-check-head", "truncated-threads", "graphql-error", "pagination", "redirect", "forbidden", "duplicate", "oversize"} {
 		t.Run(mode, func(t *testing.T) {
