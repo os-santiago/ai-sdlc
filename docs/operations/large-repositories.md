@@ -154,6 +154,11 @@ Known unverified risks:
   the disk-backed workspace only with the small Homedir fixture.
 - The verifier's collector pressure at the bounds on its 500m CPU limit (see
   the cost table).
+- Repository-test imports run one after another, while each runner waits for
+  its ready marker for a bounded time from its own start. Three imports near
+  the worst case could outlast a later runner's wait. That fails closed (the
+  verification stops) and never approves a result. The reference repository
+  imports in seconds.
 
 The fetch, codec, import, export and tree checks are verified by tests and by
 the reference repository fetch above.
