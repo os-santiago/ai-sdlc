@@ -214,6 +214,23 @@ def lowers_limit(run, provider, names, want):
     return False
 
 
+def admitted_pods_fit(run, kubectl, node, target):
+    """Before lowering a worker's limit: the sandboxed pods already admitted
+    there (outside kube-system), each able to grow to the podPidsLimit, plus
+    the worker baseline must fit the new limit. A lower maxPods only stops
+    new admissions."""
+    raw = _command(run, kubectl + ['get', 'pods', '-A', '--field-selector',
+                                   'spec.nodeName=' + node + ',status.phase!=Succeeded,status.phase!=Failed',
+                                   '-o', 'json']).stdout
+    pods = [p for p in (json.loads(raw) if raw.strip() else {}).get('items', [])
+            if p['metadata'].get('namespace') != 'kube-system']
+    required = policy()['pidBudget']['workerBaseline'] + len(pods) * sandbox_pod_pids()
+    if required > target:
+        raise ValueError('Worker %s runs %d pods that may grow to %d pids in total; refusing to lower its limit to %d '
+                         'until they end' % (node, len(pods), required, target))
+    return required
+
+
 def apply(run, provider, cluster, node, want):
     """Set the node container's limits, idempotently, and verify them.
 

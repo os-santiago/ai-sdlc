@@ -287,8 +287,12 @@ def volume_nodes(volume):
         if term.get('matchFields') or not expressions or any(
                 e.get('key') != HOSTNAME or e.get('operator') != 'In' for e in expressions):
             raise RuntimeError('The cache volume has a node affinity this tool cannot check')
+        # Expressions of one term are ANDed; terms are ORed.
+        term_hosts = None
         for expression in expressions:
-            hosts.update(expression.get('values') or [])
+            values = set(expression.get('values') or [])
+            term_hosts = values if term_hosts is None else term_hosts & values
+        hosts.update(term_hosts or set())
     return sorted(hosts)
 
 
@@ -300,7 +304,11 @@ def require_sandbox_node(cluster, volume):
     cluster with workers the RuntimeClass schedules only onto prepared nodes;
     a volume filled anywhere else would leave every verification of the key
     pending, so it is refused before the hand-over."""
-    runtime = cluster.get('runtimeclass', RUNTIME_CLASS)
+    # A checked read: an API failure must not look like an unrestricted class.
+    result = cluster.kubectl('get', 'runtimeclass', RUNTIME_CLASS, '--ignore-not-found', '-o', 'json', check=False)
+    if result.returncode != 0:
+        raise RuntimeError('Cannot read RuntimeClass %s; refusing to hand over the cache' % RUNTIME_CLASS)
+    runtime = json.loads(result.stdout) if result.stdout.strip() else None
     selector = ((runtime or {}).get('scheduling') or {}).get('nodeSelector') or {}
     hosts = volume_nodes(volume)
     if not selector or hosts is None:
@@ -372,9 +380,11 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument('--size', default='8Gi', help='work claim size (prepare; default %(default)s)')
     parser.add_argument('--storage-class', help='StorageClass of the work claim (prepare; default: the cluster default)')
     parser.add_argument('--access-mode', choices=ACCESS_MODES, default='ReadWriteOnce',
-                        help='work claim access mode (prepare): ReadWriteOnce keeps the fill and every verification '
-                             'run on the volume\'s node (seal checks it can run sandboxed pods); ReadWriteMany lets '
-                             'them use any node (default %(default)s)')
+                        help='work claim access mode (prepare): ReadWriteOnce with node-local storage whose volumes '
+                             'carry node affinity (for example local-path) keeps the fill and every verification run on '
+                             'the volume\'s node, and seal checks that node can run sandboxed pods; multi-node block '
+                             'storage without that affinity fails with Multi-Attach errors; ReadWriteMany lets them use '
+                             'any node (default %(default)s)')
     args = parser.parse_args(argv)
     raw = args.project_manifest.read_bytes()
     if len(raw) > 16384:

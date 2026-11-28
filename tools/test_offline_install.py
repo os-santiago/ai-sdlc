@@ -316,13 +316,22 @@ class SandboxTaskLimitTests(unittest.TestCase):
         applied = runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'],
                                            lambda: {'podPidsLimit': 768, 'maxPods': 12}, {'podPidsLimit': 768, 'maxPods': 12})
         self.assertEqual(applied, {'maxPods': 12, 'podPidsLimit': 768})
-        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARK + '\nmaxPods: 12\npodPidsLimit: 768\n'))
+        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARKS['maxPods'] + '\nmaxPods: 12\n'
+                                                                + runtime.KUBELET_MARK + '\npodPidsLimit: 768\n'))
         # A later pid limit changes the marked value; the pod limit alone leaves it alone.
         applied = runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'],
                                            lambda: {'podPidsLimit': 768, 'maxPods': 22}, {'podPidsLimit': 768, 'maxPods': 22})
         self.assertEqual(files[runtime.KUBELET_CONFIG].count('maxPods:'), 1)
         self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768), 768)
         self.assertIn('maxPods: 22', files[runtime.KUBELET_CONFIG])
+        # A maxPods mark never authorizes replacing a foreign podPidsLimit.
+        files, calls, read, write, command = self.fake(kubelet='podPidsLimit: 4096\n')
+        command = self.moving(files, command)
+        runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'], lambda: {'maxPods': 12}, {'maxPods': 12})
+        self.assertIn('podPidsLimit: 4096', files[runtime.KUBELET_CONFIG])
+        with self.assertRaisesRegex(ValueError, 'different podPidsLimit'):
+            runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'],
+                                     lambda: {'podPidsLimit': 768, 'maxPods': 12}, {'podPidsLimit': 768, 'maxPods': 12})
         files, calls, read, write, command = self.fake(kubelet='maxPods: 50\npodPidsLimit: 768\n')
         with self.assertRaisesRegex(ValueError, 'different maxPods'):
             runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'], lambda: {}, {'podPidsLimit': 768, 'maxPods': 12})

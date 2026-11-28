@@ -117,6 +117,9 @@ def node_configuration(current, fragment):
 DROPIN_MARK = '# AI-SDLC offline runtime:'
 KUBELET_CONFIG = '/var/lib/kubelet/config.yaml'
 KUBELET_MARK = '# AI-SDLC offline runtime: bounded pids per pod'
+# One ownership mark per managed field: a mark never authorizes changing
+# another field.
+KUBELET_MARKS = {'podPidsLimit': KUBELET_MARK, 'maxPods': '# AI-SDLC kind worker: bounded pods per node'}
 
 
 def node_pid_limit(read):
@@ -237,7 +240,8 @@ def kubelet_settings(read, write, command, node_exec, configz, desired, previous
     if config is None:
         raise ValueError('Kubelet configuration is unavailable on the kind node')
     lines = config.splitlines()
-    wanted = [key + ': ' + str(value) for key, value in sorted(desired.items())]
+    marks = {key: KUBELET_MARKS[key] for key in desired}
+    wanted = [line for key, value in sorted(desired.items()) for line in (marks[key], key + ': ' + str(value))]
     values = {key: [line for line in lines if line.startswith(key + ':')] for key in desired}
 
     def applied():
@@ -253,17 +257,17 @@ def kubelet_settings(read, write, command, node_exec, configz, desired, previous
                 raise ValueError('The kubelet does not report the configured ' + ', '.join(sorted(desired)) + ' after a restart')
         return dict(desired)
     for key, found in values.items():
-        ours = KUBELET_MARK in lines or (len(found) == 1 and found[0].split(':', 1)[1].strip().isdigit()
+        ours = marks[key] in lines or (len(found) == 1 and found[0].split(':', 1)[1].strip().isdigit()
                                          and int(found[0].split(':', 1)[1]) in previous.get(key, set()))
         if found and found != [key + ': ' + str(desired[key])] and not ours:
             raise ValueError('The kind node kubelet already sets a different ' + key)
-    kept = [line for line in lines if line != KUBELET_MARK and not any(line.startswith(key + ':') for key in desired)]
-    desired_text = '\n'.join(kept + [KUBELET_MARK] + wanted) + '\n'
+    kept = [line for line in lines if line not in marks.values() and not any(line.startswith(key + ':') for key in desired)]
+    desired_text = '\n'.join(kept + wanted) + '\n'
     stage = KUBELET_CONFIG + '.ai-sdlc-' + secrets.token_hex(6)
     write(stage, desired_text)
     try:
         staged = read(stage)
-        if staged != desired_text or [line for line in staged.splitlines() if line not in [KUBELET_MARK] + wanted] != kept:
+        if staged != desired_text or [line for line in staged.splitlines() if line not in wanted] != kept:
             raise ValueError('Staged kubelet configuration differs from the reviewed change')
         if read(KUBELET_CONFIG) != config:
             raise ValueError('Kubelet configuration changed concurrently; no replacement applied')

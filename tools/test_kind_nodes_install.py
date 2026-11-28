@@ -417,6 +417,16 @@ class WorkerTopologyTests(unittest.TestCase):
             network_probe.verify(['kubectl'], 'image', runner=runner)
         self.assertTrue(all('nodeSelector' not in v['spec'] for v in applied))
 
+    def test_lowering_a_worker_needs_room_for_its_admitted_pods(self):
+        def runner(pods):
+            items = [{'metadata': {'namespace': ns}} for ns in pods]
+            return lambda args, **_k: SimpleNamespace(stdout=json.dumps({'items': items}))
+        # 400 + 9 x 768 = 7312 fits 8192; kube-system pods are in the baseline.
+        self.assertEqual(kind_nodes.admitted_pods_fit(runner(['ai-sdlc-ci'] * 9 + ['kube-system'] * 2), ['kubectl'],
+                                                      'c-worker', 8192), 7312)
+        with self.assertRaisesRegex(ValueError, 'refusing to lower'):
+            kind_nodes.admitted_pods_fit(runner(['ai-sdlc-ci'] * 15), ['kubectl'], 'c-worker', 8192)
+
     def test_addresses_use_the_network_kind_uses(self):
         networks = {'c-control-plane': {'custom': {'IPAddress': '10.1.0.2'}},
                     'c-worker': {'kind': {'IPAddress': '10.89.0.3'}, 'other': {'IPAddress': '10.2.0.3'}},
@@ -575,6 +585,14 @@ class InstallerWiringTests(unittest.TestCase):
         self.assertIsNone(single['tekton'][7])
         self.assertNotIn('maxPods', single)
         self.assertEqual(single['probes'], [None])
+
+    def test_lowering_workers_checks_their_admitted_pods_first(self):
+        with patch.object(kind_nodes, 'admitted_pods_fit', side_effect=ValueError('admitted pods')) as fit:
+            with self.assertRaisesRegex(ValueError, 'admitted pods'):
+                self.drive(['local', '--node-pids-limit', '8192'], workers=2, node_limit=16384)
+            self.assertEqual(fit.call_args.args[2:], ('c-worker', 8192))
+            with self.assertRaises(self.Reached):
+                self.drive(['local'], workers=2, node_limit=16384)  # a default keeps 16384: nothing is lowered
 
     def test_a_different_worker_count_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'kind cannot change'):

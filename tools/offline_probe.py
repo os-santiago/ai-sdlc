@@ -132,7 +132,7 @@ def verify_nodes(kubectl, image, runtime_class, nodes):
     def call(args, value=None):
         result = subprocess.run([str(v) for v in kubectl] + args, text=True,
                                 input=json.dumps(value) if value is not None else None,
-                                capture_output=True, timeout=110)
+                                capture_output=True, timeout=150)
         if result.returncode:
             raise ValueError('Offline runtime node probe command failed')
         return result.stdout

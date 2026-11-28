@@ -156,7 +156,10 @@ class FakeCluster:
             if command[1] == 'pv':
                 return self.reply(copy.deepcopy(self.volumes.get(command[2])))
             if command[1] == 'runtimeclass':
-                return self.reply(copy.deepcopy(getattr(self, 'runtime_class', None)))
+                if getattr(self, 'runtime_class_error', False):
+                    return SimpleNamespace(returncode=1, stdout=b'')
+                value = getattr(self, 'runtime_class', None)
+                return SimpleNamespace(returncode=0, stdout=json.dumps(value).encode() if value is not None else b'')
             if command[1] == 'node':
                 return self.reply(copy.deepcopy(getattr(self, 'nodes', {}).get(command[2])))
             return self.reply(copy.deepcopy(self.claims.get((command[-1], command[2]))))
@@ -255,6 +258,16 @@ class SealTests(unittest.TestCase):
         self.assertEqual(deps.seal(cluster, GO_VECTOR, sleep=lambda _: None), 'deps-' + GO_VECTOR)
         self.assert_sealed('Delete')
         self.assertEqual(deps.volume_nodes({'spec': {}}), None)
+        # Expressions of one term are ANDed, terms ORed.
+        both = {'spec': {'nodeAffinity': {'required': {'nodeSelectorTerms': [
+            {'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': ['a', 'b']},
+                                  {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': ['a']}]},
+            {'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': ['c']}]}]}}}}
+        self.assertEqual(deps.volume_nodes(both), ['a', 'c'])
+        # An unreadable RuntimeClass is never taken for an unrestricted one.
+        self.fake.runtime_class_error = True
+        with self.assertRaisesRegex(RuntimeError, 'Cannot read RuntimeClass'):
+            deps.require_sandbox_node(cluster, {'spec': {}})
         with self.assertRaisesRegex(RuntimeError, 'cannot check'):
             deps.volume_nodes({'spec': {'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchFields': [{}]}]}}}})
 

@@ -822,6 +822,11 @@ def _main(argv, stack):
         quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed, limit, lowering, running)
         if args.command == 'local':
             tekton_quotas = quotas
+        for worker in nodes['workers']:
+            current = kind_nodes.inspect(run, provider, worker)['pidsLimit']
+            target = kind_nodes.target_limit(current, node_resources)
+            if current is None or target < current:
+                kind_nodes.admitted_pods_fit(run, kubectl, worker, target)
         # Set on creation and reconciled on every later install: podman's
         # default node pid limit (2048) is too small (#859).
         report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources, nodes)
