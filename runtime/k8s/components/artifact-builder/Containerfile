@@ -1,11 +1,11 @@
-FROM docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586 AS build
+FROM docker.io/library/golang@sha256:5f1b98fa02fe396ebce2a0227a0e08309e11792915b9dd2e1f71053d7e7e6666 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY internal ./internal
 COPY components/artifact-builder ./components/artifact-builder
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/artifact-builder/cmd
-FROM gcr.io/distroless/static@sha256:816dc4d589459a7fe33b8a2e69edb70da56ffad7161f4b415937fa2bfe7e92e8
+FROM gcr.io/distroless/static@sha256:4c2cd1dee442c9a99924a378c7c126fac8fef14771579ef567c3f2bdd7a5122a
 COPY --from=build /out/component /component
 USER 1000:1000
 ENTRYPOINT ["/component"]
