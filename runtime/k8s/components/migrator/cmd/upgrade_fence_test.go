@@ -61,13 +61,19 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count < 34 || count > 41 {
+	if count < 34 || count > 42 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 41 || source[40].Filename != "0041_large_workspace_bounds.sql" || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" || source[39].Filename != "0040_merge_retry_before_send.sql" {
+	if len(source) != 42 || source[41].Filename != "0042_generator_tool_calls.sql" || source[40].Filename != "0041_large_workspace_bounds.sql" || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" || source[39].Filename != "0040_merge_retry_before_send.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if count < 42 {
+		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.tool_calls; DELETE FROM public.schema_migrations WHERE filename='0042_generator_tool_calls.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:41]
 	}
 	if count < 41 {
 		if _, err = db.Pool.ExecContext(ctx, `ALTER TABLE public.execution_lifecycles DROP CONSTRAINT execution_lifecycles_source_bytes_check;
@@ -566,6 +572,74 @@ func TestUpgradeFenceRepairProtocolDistinctAndTyped(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+		}
+	}
+}
+
+// The configuration protocol admits the current catalog and a source missing
+// only the additive tool journal (0042), and refuses a started tool call.
+func TestConfigurationUpgradeFenceProtocolAdmitsToolJournalSource(t *testing.T) {
+	for _, count := range []int{41, 42} {
+		db, name, connection, catalog := upgradeProtocolFixture(t, count)
+		seed, err := os.ReadFile("../../../internal/store/testdata/browser_upgrade_history.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Pool.Exec(string(seed)); err != nil {
+			t.Fatal(err)
+		}
+		scenarios := []string{"held"}
+		if count == 42 {
+			scenarios = append(scenarios, "started-tool-call")
+		}
+		for _, scenario := range scenarios {
+			if scenario == "started-tool-call" {
+				if _, err = db.Pool.Exec(`INSERT INTO tool_calls(allocation_id,sequence,request_sha256) SELECT id,1,repeat('a',64) FROM model_allocations LIMIT 1`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			input, send := io.Pipe()
+			receive, output := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			done := make(chan error, 1)
+			go func() { done <- holdSelectedUpgradeFence(ctx, input, output, configurationFence) }()
+			encoder := json.NewEncoder(send)
+			decoder := json.NewDecoder(receive)
+			if err = encoder.Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+				t.Fatal(err)
+			}
+			var first map[string]any
+			if err = decoder.Decode(&first); err != nil {
+				t.Fatal(scenario, count, err)
+			}
+			if first["version"] != "ai-sdlc.configuration-upgrade-fence/v1" || first["workflowRowsWritten"] != false || first["upgradeAuthorized"] != false {
+				t.Fatal("protocol authority mismatch", scenario)
+			}
+			if scenario == "started-tool-call" {
+				if first["state"] != "rejected" || first["reason"] != "history" {
+					t.Fatal("started tool call admitted", first)
+				}
+				if err = <-done; err == nil {
+					t.Fatal("in-flight tool call returned success")
+				}
+			} else {
+				if first["state"] != "held" {
+					t.Fatal("configuration fence not held", count, first)
+				}
+				if err = encoder.Encode(map[string]any{"operation": "release", "nonce": first["nonce"]}); err != nil {
+					t.Fatal(err)
+				}
+				var next map[string]any
+				if err = decoder.Decode(&next); err != nil || next["state"] != "released" {
+					t.Fatal("configuration fence not released", next, err)
+				}
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			send.Close()
+			receive.Close()
 		}
 	}
 }

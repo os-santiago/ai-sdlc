@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -13,10 +14,14 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/engine"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 )
 
 const InputDirectory = "/var/run/ai-sdlc/assignment"
 const WorkspaceDirectory = "/workspaces"
+
+// ToolServerName names the generator tools MCP server in SCC's configuration.
+const ToolServerName = "ai-sdlc"
 
 // SCCConfiguration is deterministic and contains no provider credential. The
 // endpoint is Pod-local; external model calls require a separate authority.
@@ -28,6 +33,18 @@ const WorkspaceDirectory = "/workspaces"
 const noBytecodeName, noBytecodeValue = "PYTHONDONTWRITEBYTECODE", "1"
 
 func SCCConfiguration(p Profile, toolchain *Toolchain) []byte {
+	return SCCToolConfiguration(p, toolchain, nil)
+}
+
+// ToolsEnabled reports whether a generation offers tools: the profile enables
+// them and the assignment's manifest declares some.
+func ToolsEnabled(p Profile, tools *generatortools.Spec) bool {
+	return p.Version == ProfileVersion && p.Tools != nil && tools != nil
+}
+
+// SCCToolConfiguration is SCCConfiguration with the manifest's generator
+// tools, offered only when ToolsEnabled.
+func SCCToolConfiguration(p Profile, toolchain *Toolchain, toolSpec *generatortools.Spec) []byte {
 	tools := []string{"read_file", "list_dir", "search_text", "memory_read", "write_file", "edit_file", "run_shell", "git", "memory_write", "code_query", "repo_probe"}
 	if p.Version == ReviewProfileVersion {
 		tools = []string{"read_file", "list_dir", "search_text", "code_query"}
@@ -37,9 +54,25 @@ func SCCConfiguration(p Profile, toolchain *Toolchain) []byte {
 		// SCC waits past the mailbox window so the bounded broker decides.
 		model["timeout"] = sccWaitMillis(p)
 	}
+	enabled := ToolsEnabled(p, toolSpec)
+	if enabled {
+		// SCC loads MCP servers only from this trusted configuration; tools
+		// surface as mcp__<server>__<tool> and need the same auto-approval.
+		for _, tool := range toolSpec.Tools {
+			tools = append(tools, "mcp__"+ToolServerName+"__"+tool.Name)
+		}
+	}
 	config := map[string]any{
 		"model":       model,
 		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
+	}
+	if enabled {
+		spec, _ := json.Marshal(toolSpec)
+		config["mcp"] = map[string]any{"servers": map[string]any{ToolServerName: map[string]any{
+			"command":   "/executor",
+			"args":      []string{"tools-mcp", "--spec", string(spec), "--wait-seconds", fmt.Sprint(p.Tools.Seconds)},
+			"timeoutMs": (p.Tools.Seconds + 30) * 1000,
+		}}}
 	}
 	if p.Version != ReviewProfileVersion {
 		// Toolchain variables reach run_shell children the same way; PATH,
@@ -134,7 +167,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		return 1
 	}
 	config, err := readProjected(InputDirectory+"/scc-config.json", MaxProfileBytes)
-	if err != nil || string(config) != string(SCCConfiguration(p, a.Toolchain)) {
+	if err != nil || string(config) != string(SCCToolConfiguration(p, a.Toolchain, a.Tools)) {
 		return 1
 	}
 	uid, err := readProjected("/var/run/ai-sdlc/pod/uid", 128)

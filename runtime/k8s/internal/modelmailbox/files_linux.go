@@ -15,6 +15,19 @@ import (
 
 const requestFile = "request.json"
 const responseFile = "response.json"
+const toolRequestFile = "tool-request.json"
+const toolResponseFile = "tool-response.json"
+
+// envelopeLimit is the size bound of each mailbox file.
+func envelopeLimit(name string) (int64, bool) {
+	switch name {
+	case requestFile, responseFile, toolResponseFile:
+		return MaxEnvelopeBytes, true
+	case toolRequestFile:
+		return MaxToolEnvelopeBytes, true
+	}
+	return 0, false
+}
 
 // ErrPending includes the brief link/unlink publication window. Linked file
 // bytes are never read, even if an adversary leaves the extra link indefinitely.
@@ -34,7 +47,8 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error { return s.dir.Close() }
 
 func (s *Store) read(name string) ([]byte, error) {
-	if name != requestFile && name != responseFile {
+	limit, ok := envelopeLimit(name)
+	if !ok {
 		return nil, errors.New("invalid mailbox filename")
 	}
 	fd, err := syscall.Openat(int(s.dir.Fd()), name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
@@ -47,20 +61,20 @@ func (s *Store) read(name string) ([]byte, error) {
 	f := os.NewFile(uintptr(fd), "envelope")
 	defer f.Close()
 	var before, after syscall.Stat_t
-	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Size > MaxEnvelopeBytes {
+	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Size > limit {
 		return nil, errors.New("unsafe mailbox envelope")
 	}
 	if before.Nlink != 1 {
 		return nil, ErrPending
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, MaxEnvelopeBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err == nil && syscall.Fstat(fd, &after) == nil && removedDuringRead(before, after) {
 		// The server removes a consumed request (or response) right after the
 		// exchange; a reader that opened it just before sees the last link go.
 		// That envelope no longer exists, exactly like a missing file.
 		return nil, os.ErrNotExist
 	}
-	if err != nil || len(raw) > MaxEnvelopeBytes || syscall.Fstat(fd, &after) != nil || after.Nlink != 1 || before.Size != after.Size || int64(len(raw)) != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim {
+	if err != nil || int64(len(raw)) > limit || syscall.Fstat(fd, &after) != nil || after.Nlink != 1 || before.Size != after.Size || int64(len(raw)) != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim {
 		return nil, errors.New("mailbox envelope changed or exceeded limit")
 	}
 	return raw, nil
@@ -73,14 +87,15 @@ func removedDuringRead(before, after syscall.Stat_t) bool {
 }
 
 func (s *Store) publish(name string, e Envelope) error {
-	if name != requestFile && name != responseFile {
+	limit, ok := envelopeLimit(name)
+	if !ok {
 		return errors.New("invalid mailbox filename")
 	}
 	if _, err := s.read(name); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("mailbox destination already exists or is unsafe")
 	}
 	raw, err := json.Marshal(e)
-	if err != nil || len(raw) > MaxEnvelopeBytes {
+	if err != nil || int64(len(raw)) > limit {
 		return errors.New("invalid mailbox envelope size")
 	}
 	var nonce [16]byte
@@ -113,7 +128,7 @@ func (s *Store) publish(name string, e Envelope) error {
 }
 
 func (s *Store) remove(name string) error {
-	if name != requestFile && name != responseFile {
+	if _, ok := envelopeLimit(name); !ok {
 		return errors.New("invalid mailbox filename")
 	}
 	err := syscall.Unlinkat(int(s.dir.Fd()), name)
@@ -147,4 +162,42 @@ func (s *Store) WriteResponse(id Identity, response Envelope) error {
 		return errors.New("response does not match pending request")
 	}
 	return s.publish(responseFile, response)
+}
+
+// ReadToolRequest returns the pending generator tool request, validated.
+func (s *Store) ReadToolRequest(id Identity) (Envelope, error) {
+	raw, err := s.read(toolRequestFile)
+	if err != nil {
+		return Envelope{}, err
+	}
+	e, err := DecodeWithin(raw, MaxToolEnvelopeBytes)
+	if err != nil {
+		return e, err
+	}
+	return e, e.Validate(id, "tool-request")
+}
+
+// WriteToolResponse answers the pending tool request it matches exactly.
+func (s *Store) WriteToolResponse(id Identity, response Envelope) error {
+	if err := response.Validate(id, "tool-response"); err != nil {
+		return err
+	}
+	request, err := s.ReadToolRequest(id)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrPending) {
+		// The call ended unanswered (its window passed or its caller left):
+		// the helper reports this as nothing pending (exit 3).
+		return fmt.Errorf("%w: tool request no longer pending", ErrPending)
+	}
+	if err != nil {
+		return errors.New("tool response has no valid pending request")
+	}
+	if request.Sequence > response.Sequence {
+		// The answered call ended unanswered and the generator already made
+		// a newer one: the answered call is no longer pending either.
+		return fmt.Errorf("%w: a newer tool request is pending", ErrPending)
+	}
+	if response.Sequence != request.Sequence || response.RequestSHA256 != request.RequestSHA256 || response.ExpiresAt != request.ExpiresAt {
+		return errors.New("tool response does not match pending request")
+	}
+	return s.publish(toolResponseFile, response)
 }

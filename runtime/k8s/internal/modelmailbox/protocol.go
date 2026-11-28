@@ -19,6 +19,12 @@ const (
 	MaxResponseBytes = 256 * 1024
 	MaxEnvelopeBytes = MaxResponseBytes*4/3 + 4096
 	MaxRequests      = 32
+	// Generator tool calls (Tekton catalog runs on the candidate tree): the
+	// request carries the candidate diff, the response a bounded summary.
+	MaxToolRequestBytes  = 800 * 1024
+	MaxToolResponseBytes = 16 * 1024
+	MaxToolEnvelopeBytes = MaxToolRequestBytes*4/3 + 4096
+	MaxToolCalls         = 16
 )
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
@@ -70,16 +76,57 @@ func (e Envelope) Validate(id Identity, kind string) error {
 		default:
 			return errors.New("unsupported mailbox response status")
 		}
+	} else if kind == "tool-request" {
+		if e.Status != 0 || e.Sequence > MaxToolCalls || Digest(e.Payload) != e.RequestSHA256 || ValidateToolRequest(e.Payload) != nil {
+			return errors.New("invalid mailbox tool request")
+		}
+	} else if kind == "tool-response" {
+		if e.Sequence > MaxToolCalls || len(e.Payload) == 0 || len(e.Payload) > MaxToolResponseBytes || !json.Valid(e.Payload) {
+			return errors.New("invalid mailbox tool response")
+		}
+		switch e.Status {
+		case 200, 400, 403, 429, 500, 504:
+		default:
+			return errors.New("unsupported mailbox tool response status")
+		}
 	} else {
 		return errors.New("unsupported mailbox envelope kind")
 	}
 	return nil
 }
 
+// ValidateToolRequest checks the shape of a generator tool call: an object
+// with only tool, target, packages and diff. The controller authorizes it
+// against the manifest; the mailbox only bounds and transports it.
+func ValidateToolRequest(raw []byte) error {
+	if len(raw) == 0 || len(raw) > MaxToolRequestBytes {
+		return errors.New("invalid tool request size")
+	}
+	fields, err := objectFields(raw)
+	if err != nil {
+		return errors.New("invalid tool request")
+	}
+	allowed := map[string]bool{"tool": true, "target": true, "packages": true, "diff": true}
+	for key := range fields {
+		if !allowed[key] {
+			return errors.New("unsupported tool request field")
+		}
+	}
+	var tool, target string
+	if json.Unmarshal(fields["tool"], &tool) != nil || len(tool) == 0 || len(tool) > 64 ||
+		json.Unmarshal(fields["target"], &target) != nil || len(target) == 0 || len(target) > 256 {
+		return errors.New("invalid tool request tool or target")
+	}
+	return nil
+}
+
 // Decode rejects duplicate, case-variant, unknown and missing envelope fields.
-func Decode(raw []byte) (Envelope, error) {
+func Decode(raw []byte) (Envelope, error) { return DecodeWithin(raw, MaxEnvelopeBytes) }
+
+// DecodeWithin is Decode with an explicit size bound (tool requests are larger).
+func DecodeWithin(raw []byte, limit int) (Envelope, error) {
 	var e Envelope
-	if len(raw) > MaxEnvelopeBytes {
+	if len(raw) > limit {
 		return e, errors.New("mailbox envelope too large")
 	}
 	fields, err := objectFields(raw)

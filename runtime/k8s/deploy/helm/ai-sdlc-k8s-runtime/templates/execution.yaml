@@ -64,6 +64,35 @@ subjects:
     namespace: {{ .Release.Namespace }}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: execution-controller}
 ---
+{{- if .Values.candidate.generatorTools }}
+{{- /* Generator tools (docs/architecture/tekton-task-integration.md): the
+       execution controller runs the reviewed catalog pipelines in the Tekton
+       CI namespace that ./install.sh local --tekton-ci creates. It creates and
+       reads PipelineRuns and cancels them (patch spec.status), and creates
+       the candidate ConfigMaps, makes the run own them (patch), and lists
+       and deletes unowned ones. Admission there decides which runs and which
+       ConfigMaps (only immutable candidates) are allowed. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-generator-tools, namespace: ai-sdlc-ci}
+rules:
+  - apiGroups: [tekton.dev]
+    resources: [pipelineruns]
+    verbs: [create, get, patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, patch, delete, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: ai-sdlc-generator-tools, namespace: ai-sdlc-ci}
+subjects:
+  - kind: ServiceAccount
+    name: ai-sdlc-execution-controller
+    namespace: {{ .Release.Namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ai-sdlc-generator-tools}
+---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

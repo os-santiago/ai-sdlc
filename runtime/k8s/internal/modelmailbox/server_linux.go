@@ -38,13 +38,35 @@ type Server struct {
 	// keepaliveInterval; tests shorten them.
 	commitAfter    time.Duration
 	keepaliveEvery time.Duration
+	// tools, when set, enables the generator tool route.
+	tools        *ToolLimits
+	toolActive   chan struct{}
+	toolSequence uint64 // accessed only while holding toolActive
+}
+
+// ToolLimits bounds the generator tool route: how many calls the attempt may
+// make and how long the helper waits for each answer. The controller applies
+// the durable budget; these are local bounds.
+type ToolLimits struct {
+	MaxCalls int
+	Wait     time.Duration
+}
+
+// EnableTools turns on POST /v1/ai-sdlc/tools.
+func (s *Server) EnableTools(limits ToolLimits) error {
+	if limits.MaxCalls < 1 || limits.MaxCalls > MaxToolCalls || limits.Wait < time.Second || limits.Wait > 1800*time.Second {
+		return errors.New("invalid mailbox tool limits")
+	}
+	s.tools = &limits
+	s.toolActive = make(chan struct{}, 1)
+	return nil
 }
 
 func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
 	if store == nil || id.Validate() != nil || wait < time.Millisecond || wait > 600*time.Second {
 		return nil, errors.New("invalid mailbox server configuration")
 	}
-	for _, name := range []string{requestFile, responseFile} {
+	for _, name := range []string{requestFile, responseFile, toolRequestFile, toolResponseFile} {
 		if _, err := store.read(name); !errors.Is(err, os.ErrNotExist) {
 			return nil, errors.New("mailbox is not empty; use a new attempt volume")
 		}
@@ -95,6 +117,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" && r.URL.RawQuery == "" {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"mailbox-only"}`))
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/ai-sdlc/tools" && r.URL.RawQuery == "" && s.tools != nil {
+		s.serveTool(w, r)
 		return
 	}
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || r.URL.RawQuery != "" {
@@ -283,3 +309,79 @@ type boundedConn struct {
 }
 
 func (c *boundedConn) Close() error { err := c.Conn.Close(); c.once.Do(c.release); return err }
+
+// serveTool relays one generator tool call: it bounds the request, publishes
+// it for the execution controller, and returns the controller's bounded
+// answer. It authorizes nothing; the controller checks the call against the
+// project manifest and the generation's tool budget.
+func (s *Server) serveTool(w http.ResponseWriter, r *http.Request) {
+	select {
+	case s.toolActive <- struct{}{}:
+		defer func() { <-s.toolActive }()
+	default:
+		failure(w, 429, "tool_call_already_pending")
+		return
+	}
+	if s.toolSequence >= uint64(s.tools.MaxCalls) {
+		failure(w, 429, "local_tool_limit")
+		return
+	}
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "application/json" {
+		failure(w, 415, "json_required")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxToolRequestBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		failure(w, 413, "request_too_large")
+		return
+	}
+	if ValidateToolRequest(body) != nil {
+		failure(w, 400, "invalid_tool_request")
+		return
+	}
+	// A build can outlast the model call window the server was sized for.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.tools.Wait + 5*time.Second))
+	s.toolSequence++
+	request := Envelope{Version: Version, Kind: "tool-request", Attempt: s.id.Attempt, PodUID: s.id.PodUID, Sequence: s.toolSequence,
+		RequestSHA256: Digest(body), Payload: body, ExpiresAt: time.Now().Add(s.tools.Wait).UnixMilli()}
+	if err := s.store.publish(toolRequestFile, request); err != nil {
+		log.Print(err)
+		failure(w, 502, "mailbox_unavailable")
+		return
+	}
+	log.Printf("tool request published sequence=%d", s.toolSequence)
+	defer s.store.remove(toolRequestFile)
+	defer s.store.remove(toolResponseFile)
+	ctx, cancel := context.WithTimeout(r.Context(), s.tools.Wait)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			failure(w, 504, "tool_deadline")
+			return
+		case <-tick.C:
+			raw, err := s.store.read(toolResponseFile)
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrPending) {
+				continue
+			}
+			if err != nil {
+				failure(w, 502, "unsafe_response")
+				return
+			}
+			response, err := Decode(raw)
+			if err != nil || response.Validate(s.id, "tool-response") != nil || response.Sequence != request.Sequence ||
+				response.RequestSHA256 != request.RequestSHA256 || response.ExpiresAt != request.ExpiresAt {
+				failure(w, 502, "response_mismatch")
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(response.Status)
+			_, _ = w.Write(response.Payload)
+			return
+		}
+	}
+}

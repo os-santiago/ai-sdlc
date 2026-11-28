@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/normalizedevent"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -204,6 +206,10 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	if err = addRepositoryContext(&assignment, in.Policy.ProjectSHA256); err != nil {
 		return Prepared{}, err
 	}
+	// The manifest's tools enter the assignment only when the installation's
+	// profile enables them, so the assignment of a profile without tools is
+	// unchanged.
+	assignment.Tools = toolsForProfile(in.Profile, c.ProfileSHA256, assignment.Tools)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -282,6 +288,7 @@ func addRepositoryContext(a *executor.Assignment, projectSHA256 string) error {
 	}
 	a.Workspace = workspaceOf(m)
 	a.Toolchain = toolchainOf(m)
+	a.Tools = ToolSpecOf(m)
 	if a.Toolchain == nil {
 		a.Verification = verificationOf(m)
 	}
@@ -299,6 +306,47 @@ func WorkspaceFor(repository, projectSHA256 string) string {
 		return ""
 	}
 	return workspaceOf(m)
+}
+
+// toolsForProfile keeps the manifest's tool spec only when the installation's
+// generator profile has a tool budget.
+func toolsForProfile(profile []byte, digest string, spec *generatortools.Spec) *generatortools.Spec {
+	if p, err := executor.ParseProfile(profile, digest); err != nil || p.Tools == nil {
+		return nil
+	}
+	return spec
+}
+
+// ToolSpecOf renders the manifest's tekton.tools as the generator tool spec:
+// each tool with the targets its pipeline accepts (the declared Maven
+// modules). Nil when the manifest declares no usable tools. npm tools are not
+// offered: npm-lock-update takes no candidate until its egress is proxy-only
+// and non-registry specs and hosts are refused (slice 3).
+func ToolSpecOf(m project.Manifest) *generatortools.Spec {
+	if m.Tekton == nil || len(m.Tekton.Tools) == 0 {
+		return nil
+	}
+	spec := &generatortools.Spec{}
+	for _, tool := range m.Tekton.Tools {
+		if !generatortools.Offered(tool.Pipeline) {
+			continue
+		}
+		var targets []string
+		switch project.TektonTargetKind(tool.Pipeline) {
+		case "module":
+			for module := range m.Tekton.Modules {
+				targets = append(targets, module)
+			}
+			slices.Sort(targets)
+		case "npm":
+			targets = append(targets, m.Tekton.NpmDirectories...)
+		}
+		spec.Tools = append(spec.Tools, generatortools.Tool{Name: tool.Name, Kind: tool.Pipeline, Targets: targets})
+	}
+	if len(spec.Tools) == 0 || spec.Validate() != nil {
+		return nil
+	}
+	return spec
 }
 
 func workspaceOf(m project.Manifest) string {

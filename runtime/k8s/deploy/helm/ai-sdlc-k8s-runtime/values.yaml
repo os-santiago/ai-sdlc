@@ -40,6 +40,9 @@ candidate:
   credentialRevision: ""
   configJSON: ""
   apiServerCIDRs: []
+  # Generator tools: bind the execution controller to a Role in ai-sdlc-ci
+  # (created by ./install.sh local --tekton-ci) to run catalog pipelines.
+  generatorTools: false
 verifier:
   digest: ""
   # Mount the pre-existing Secret ai-sdlc-source-reader (key credential.json:

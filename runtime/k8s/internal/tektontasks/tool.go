@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -34,6 +35,10 @@ const MaxToolCallBytes = 6*MaxCandidateBytes + 16*1024
 
 // ErrToolBudget refuses a call beyond the generation's tool budget.
 var ErrToolBudget = errors.New("tekton tool budget exhausted")
+
+// ErrToolBusy refuses a call while another call of the generation holds the
+// remaining seconds; it is also an ErrToolBudget.
+var ErrToolBusy = fmt.Errorf("%w: another tool call is running", ErrToolBudget)
 
 // ParseToolCall decodes a call strictly and bounds it.
 func ParseToolCall(raw []byte) (ToolCall, error) {
@@ -70,9 +75,10 @@ type ToolBudget struct {
 	MaxCalls   int
 	MaxSeconds int
 
-	mu    sync.Mutex
-	used  int
-	spent time.Duration
+	mu      sync.Mutex
+	used    int
+	running int
+	spent   time.Duration
 }
 
 // reserve admits one more call and returns the time it may take, which is
@@ -81,9 +87,13 @@ func (b *ToolBudget) reserve() (time.Duration, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	remaining := time.Duration(b.MaxSeconds)*time.Second - b.spent
+	if b.used < b.MaxCalls && remaining <= 0 && b.running > 0 {
+		return 0, ErrToolBusy
+	}
 	if b.used >= b.MaxCalls || remaining <= 0 {
 		return 0, ErrToolBudget
 	}
+	b.running++
 	b.used++
 	b.spent += remaining
 	return remaining, nil
@@ -93,6 +103,7 @@ func (b *ToolBudget) reserve() (time.Duration, error) {
 func (b *ToolBudget) settle(reserved, took time.Duration) {
 	b.mu.Lock()
 	b.spent -= reserved - min(max(took, 0), reserved)
+	b.running--
 	b.mu.Unlock()
 }
 
@@ -181,18 +192,14 @@ func InvokeTool(ctx context.Context, cluster Cluster, journal ToolJournal, budge
 		_ = SweepCandidates(sweep, cluster, time.Now(), CandidateSweepAge)
 		stopSweep()
 	}
-	var journalErr error
 	run := ""
-	outcome, err := RunReporting(runCtx, cluster, request, runtimeClass, poll, func(pipelineRun, configMap string) {
-		run = pipelineRun
-		if e := journal.Created(runCtx, sequence, pipelineRun, configMap); e != nil && journalErr == nil {
-			journalErr = e
+	outcome, err := RunReporting(runCtx, cluster, request, runtimeClass, poll, func(pipelineRun, configMap string) error {
+		if pipelineRun != "" {
+			run = pipelineRun
 		}
+		return journal.Created(runCtx, sequence, pipelineRun, configMap)
 	})
 	budget.settle(allowed, time.Since(started))
-	if err == nil && journalErr != nil {
-		err = journalErr
-	}
 	if err != nil {
 		_ = finish(ToolRecord{PipelineRun: run, ConfigMap: request.CandidateConfigMap, Revision: revision, State: "error"})
 		return ToolResult{}, err

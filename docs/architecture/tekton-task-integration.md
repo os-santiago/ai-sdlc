@@ -206,7 +206,9 @@ execution controller (worker) ──pods/exec read-tool──┘
   and paths outside the tree or under `.git`, applies the diff to the work
   tree and the index together (`git apply --index`, symlinks disabled), fails
   if the work tree then differs from the index (untracked, ignored or
-  unstaged files), and reports the resulting tree id and the digest it
+  unstaged files; the tools server sends moves as a deletion and an addition,
+  `git diff --no-renames`, and the check reads status without rename
+  pairing), and reports the resulting tree id and the digest it
   applied. `Run` checks that reported digest against the diff it sent and
   reports the tree in the result. The ConfigMap is owned by the PipelineRun
   and deleted with it; if the owner cannot be set, the ConfigMap is deleted
@@ -220,9 +222,10 @@ execution controller (worker) ──pods/exec read-tool──┘
   generator a way out. It returns in slice 3 only once non-registry specs and
   non-registry lockfile hosts are refused and egress is proxy-only
   (Stage 2b).
-- **Who triggers.** Only the execution controller, with its RBAC in
-  `ai-sdlc-ci` (create/get/patch PipelineRuns; create/patch/delete/list
-  ConfigMaps). RBAC `resourceNames` cannot restrict creation, so the
+- **Who triggers.** Only the execution controller, with the Role
+  `ai-sdlc-generator-tools` in `ai-sdlc-ci` that the runtime chart renders
+  when `candidate.generatorTools` is true (create/get/patch PipelineRuns;
+  create/patch/delete/list ConfigMaps). RBAC `resourceNames` cannot restrict creation, so the
   ValidatingAdmissionPolicy `ai-sdlc-ci-candidate-configmaps` does: in
   `ai-sdlc-ci`, a ConfigMap is only an immutable `ai-sdlc-candidate-<digest>-<suffix>`
   labelled `ai-sdlc.io/candidate=true` that holds exactly `candidate.diff`
@@ -230,6 +233,52 @@ execution controller (worker) ──pods/exec read-tool──┘
   administrators are exempt). Admission admits the candidate workspace only
   as such a ConfigMap and only for `ai-sdlc-maven-build-test`; build-test
   still runs under the sandbox.
+- **Where the tools come from.** The tool list is per repository: the
+  controller derives it from the manifest the authorizing policy binds
+  (`execution.ToolSpecOf`, each offered tool with the declared Maven modules
+  as targets; npm tools are not offered until slice 3) and puts it in the
+  assignment, like the toolchain, but only when the installation's executor
+  profile has a tool budget (`tools: {calls: 1-8, seconds: 120-900}`,
+  seconds within `maxSeconds`). Without that budget the assignment,
+  configuration and workload are byte-identical to before. Before the worker
+  starts, the controller checks that the policy's manifest still declares
+  exactly the assigned tools.
+- **Candidate baseline.** The executor records the source baseline commit
+  in `refs/ai-sdlc/baseline`, outside the checked-out branch, and the tools
+  server diffs the work tree against that ref. A generator commit on its
+  branch moves the branch, not the ref, so committed changes stay in the
+  candidate (the ref is not a security boundary: the result is advisory and
+  the exported candidate is verified independently).
+- **Mailbox route.** `POST /v1/ai-sdlc/tools` exists only when the mailbox is
+  started with `--tool-calls` and `--tool-wait-seconds` (from the profile).
+  It accepts one call at a time, at most the budgeted number, a body of at
+  most 800 KiB (the tools server refuses, with a message to the generator, a
+  diff whose JSON-encoded request would exceed it), and waits at most the profile's seconds for the answer
+  (504 after). The request and answer are their own files
+  (`tool-request.json`, `tool-response.json`, answer at most 16 KiB), read and
+  written by the fixed `read-tool` and `respond-tool` helper modes over
+  pods/exec, bound to the attempt and Pod UID like model calls.
+- **One call at a time.** The mailbox refuses a second concurrent call and
+  the tools server tells the generator to wait for the running one; the
+  controller's budget reports a call that finds the seconds held by a running
+  call as busy (`ErrToolBusy`), not exhausted. A run whose ConfigMap or
+  PipelineRun name cannot be journaled is cancelled and its candidate
+  deleted (`ErrJournal`).
+- **Dispatch.** The controller's drive loop answers one pending tool call per
+  cycle in which no model request is pending (the generator waits for the
+  tool, so none is). It authorizes every call itself against the assignment's
+  tools (declared, offered, declared target), because the generator can reach
+  the mailbox route without the tools server. A repeated sequence is answered
+  once and an earlier or rewritten one stops the run; a sequence may skip
+  forward, because the mailbox numbers calls that ended unread (their window
+  passed). A run ends ten seconds before the request expires, authority is
+  rechecked every ten seconds while it runs (a refusal cancels it and stops
+  the generation; evidence that is only stale is tolerated), and an answer
+  the mailbox no longer waits for (the helper's exit 3) is not an error: the
+  generator already received 504. Refusals and failures map to fixed
+  messages: 403 outside the assignment's tools or the manifest scope, 429
+  budget exhausted or another call running, 504 deadline, 500 failure; no
+  cluster detail or log is forwarded.
 - **Allowlist.** `tektontasks.InvokeTool` accepts only a tool named in
   `tekton.tools`, a declared target, and npm package names; repository,
   revision, services and Maven switches come from the manifest and the
@@ -248,9 +297,26 @@ execution controller (worker) ──pods/exec read-tool──┘
 - **Journal.** Each call records the request digest before the run, the
   candidate ConfigMap and PipelineRun names as soon as each exists, and the
   revision, tree, summary digest and state after it; an error records the
-  names it has (`ToolJournal`; a `tool_calls` table keyed like `model_calls`,
-  slice 2). Journal and cleanup calls after the run have their own 30 s
-  timeouts. The flow console can derive a `tool-call` step from it.
+  names it has (`ToolJournal`; journal and cleanup calls after the run have
+  their own 30 s timeouts). The store keeps it in `tool_calls` (migration
+  `0042_generator_tool_calls.sql`), keyed by model allocation and sequence
+  1..8 like `model_calls`. `store.BeginToolCall` assigns the next sequence
+  only while the allocation's execution is claimed and unexpired, and
+  refuses while another call of the allocation is `started` or beyond 8
+  calls. `store.FinishToolCall` moves a `started` call to `passed`, `failed`
+  or `error` exactly once; table checks require a PipelineRun, revision and
+  summary digest for `passed` and `failed`; a `started` call may carry only
+  the object names (`store.RecordToolCallObjects`, set once). When execution claim recovery stops an execution, its call left
+  `started` becomes `abandoned`, keeping any object names: the outcome is
+  unknown, so no outcome is invented and a late finish is refused. No tool input, diff, summary body
+  or log is stored. Only the worker role (`aisdlc_worker`) can read the table
+  (row-level security), and only in candidate and verification modes:
+  maintenance and shadow revoke it with the rest of the execution surface.
+  The configuration upgrade fence admits a source without the table (an
+  additive, empty table that no historical row depends on; see
+  `store.ToolJournalMigrations`) and treats a `started` call as in-flight
+  work. The flow console does not read it yet; a `tool-call` step can be
+  derived from it later.
 
 ### Slices
 
@@ -264,12 +330,14 @@ execution controller (worker) ──pods/exec read-tool──┘
    incompatible types: java.lang.String cannot be converted to int` with tree
    `5fa25b8e`; a harmless diff passed 94 tests with tree `6d647ccd`. A run
    without a candidate still completes (the apply task is skipped).
-2. Mailbox tool endpoint and protocol, the executor's MCP tools server, the
-   execution controller's dispatch with RBAC, the `tool_calls` migration and
-   store, and budgets in the execution profile.
+2. **Done (this change):** the mailbox tool endpoint and protocol, the
+   executor's MCP tools server (`/executor tools-mcp`), the tool spec from the
+   bound manifest, budgets in the execution profile, the execution
+   controller's dispatch with RBAC, and the `tool_calls` journal (migration
+   0042, `BeginToolCall`/`FinishToolCall`).
 3. `npm_lock_update` through the same path, returning the lockfile change,
    after refusing non-registry specs and lockfile hosts and with proxy-only
-   egress.
+   egress. Until then the tools server does not offer npm tools.
 4. Flow console `tool-call` step.
 
 ## Stages

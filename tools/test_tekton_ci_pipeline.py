@@ -346,6 +346,8 @@ class ScriptTests(unittest.TestCase):
                           None, 'symbolic link or submodule'),
             'does not apply': (b'--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-class B {}\n+class C {}\n', None, 'does not apply'),
             'size bound': (b'x' * (786432 + 1), None, 'exceeds 768 KiB'),
+            'symlink deletion': (b'diff --git a/l b/l\ndeleted file mode 120000\nindex e69de29..0000000\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n',
+                                 None, 'adds, changes or deletes a symbolic link'),
         }
         for name, (diff, digest, message) in cases.items():
             result = self.apply_candidate(diff, digest)[0]
