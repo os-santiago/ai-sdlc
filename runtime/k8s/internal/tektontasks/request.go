@@ -155,6 +155,10 @@ func (r Request) Validate() error {
 	return nil
 }
 
+// CandidatePriorityClass is the PriorityClass the CI namespace requires on
+// build-test, the only catalog task that runs candidate code.
+const CandidatePriorityClass = "ai-sdlc-ci-candidate"
+
 // PipelineRun renders the request as a PipelineRun object for the dynamic
 // client. runtimeClass, when set, applies only to the offline build-test task
 // (the installed gVisor class has no network, which fetch tasks need).
@@ -191,7 +195,10 @@ func (r Request) PipelineRun(runtimeClass string) (map[string]any, error) {
 		"workspaces":      workspaces,
 	}
 	if runtimeClass != "" && r.Pipeline == project.TektonMavenBuildTest {
-		sandboxed := map[string]any{"runtimeClassName": runtimeClass}
+		// The CI namespace admits build-test only under the sandbox and the
+		// candidate PriorityClass, whose scoped quota runs one candidate pod
+		// at a time (docs/operations/tekton-ci.md, CI concurrency).
+		sandboxed := map[string]any{"runtimeClassName": runtimeClass, "priorityClassName": CandidatePriorityClass}
 		for key, value := range pod {
 			sandboxed[key] = value
 		}
