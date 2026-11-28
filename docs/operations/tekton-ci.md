@@ -87,7 +87,7 @@ its history, so removal is a deliberate operator action
 | remote resolvers (`git`, `http`, `hub`, `bundles`, `cluster`) | disabled | No run can fetch an unreviewed definition. |
 | `enable-api-fields` | `stable` | No alpha or beta behavior. |
 | `disable-creds-init` | `true` | No credential initialization; the CI carries no credentials. |
-| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster, or on a local kind cluster with `--workers`, where every task pod runs on the one CI worker. |
+| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster, or on a local kind cluster with `--workers`, where every task pod runs on the one CI worker. With `--shared-storage` the caches are ReadWriteMany and runs spread over the workers, each following its own node-local source claim. |
 | `send-cloudevents-for-runs` | `false` | No event sink is configured. |
 
 ## The catalog

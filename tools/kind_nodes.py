@@ -111,7 +111,7 @@ def max_pods(limit):
     return worker_capacity(limit) + policy()['workers']['podSlots']
 
 
-def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0):
+def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0, shared=False):
     """Refuse a node limit that cannot hold its expected pid load.
 
     Single node: the load is the node baseline (system pods, the runtime and its database,
@@ -144,6 +144,19 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0):
                   'workerBaseline': budget['workerBaseline'], 'podPidsLimit': pod, 'workers': workers,
                   'workerPodCapacity': capacity, 'workerMaxPods': max_pods(limit), 'sandboxPods': sandbox_pods,
                   'candidatePods': candidate_pods, 'fetchPods': fetch_pods, 'requiredPods': required}
+        if shared:
+            report['sharedStorage'] = True
+            # ReadWriteMany caches: CI and verification pods spread over every
+            # worker; each worker's maxPods still caps it at its pid limit.
+            # A sealed dependency cache may still be node-local (ReadWriteOnce),
+            # which puts one verification run on one worker.
+            if (budget['nodeBaseline'] > limit or capacity < max(1, sandbox_pods)
+                    or required > workers * capacity):
+                raise ValueError('%d workers with a pid limit of %d hold %d pods (%d each); one verification run and '
+                                 'the Tekton CI pod quotas (installed or requested) need %d; raise --node-pids-limit '
+                                 'or lower the quotas, quotas first when lowering both'
+                                 % (workers, limit, workers * max(capacity, 0), max(capacity, 0), required))
+            return report
         if budget['nodeBaseline'] > limit or capacity < 1 or required > capacity:
             raise ValueError('The CI worker with a pid limit of %d holds %d pods; one verification run and the Tekton CI '
                              'pod quotas (installed or requested) need %d, all on that worker because their volumes '
@@ -325,6 +338,10 @@ def apply_cluster(run, provider, cluster, kind, env, want, nodes=None, cgroup_ro
 ROLE_LABEL = 'ai-sdlc.io/node-role'
 ROLE_SANDBOX = 'sandbox'
 READY_LABEL = 'ai-sdlc.io/offline-runtime'
+# Shared storage (--shared-storage): one host directory mounted into every
+# node, served as a ReadWriteMany StorageClass (tools/shared_storage.py).
+SHARED_PATH = '/var/local/ai-sdlc-shared'
+SHARED_CLASS = 'ai-sdlc-shared'
 CI_LABEL = 'ai-sdlc.io/ci-node'
 CI = 'true'
 READY = 'ready'
@@ -340,18 +357,32 @@ def validate_workers(workers):
     return workers
 
 
-def cluster_config(workers):
+def cluster_config(workers, shared_dir=None):
     """The kind cluster configuration: the committed kind.yaml, plus one
     worker per requested node with the same pinned image, the sandbox role
     label and the sandbox taint; the first worker is also the CI worker.
-    Zero workers is kind.yaml unchanged."""
+    With shared_dir (shared storage), every node mounts that one host
+    directory at SHARED_PATH and the CI worker label is not set. Zero
+    workers is kind.yaml unchanged."""
     base = (LOCAL / 'kind.yaml').read_text()
     if not workers:
+        if shared_dir is not None:
+            raise ValueError('Shared storage needs workers')
         return base
+    mount = '' if shared_dir is None else (
+        '    extraMounts:\n      - hostPath: %s\n        containerPath: %s\n' % (shared_dir, SHARED_PATH))
+    if shared_dir is not None:
+        if not str(shared_dir).startswith('/') or any(c in str(shared_dir) for c in '\n"\':#'):
+            raise ValueError('The shared storage directory must be a plain absolute path')
+        control = '  - role: control-plane\n'
+        if base.count(control) != 1:
+            raise ValueError('kind.yaml must declare exactly one control-plane node')
+        base = base.replace(control, control + mount)
     images = IMAGE_LINE.findall(base)
     if len(images) != 1:
         raise ValueError('kind.yaml must pin exactly one node image')
     worker = ('  - role: worker\n'
+              + mount.replace('%', '%%') +
               '    image: %s\n'
               '    labels:\n'
               '      %s: %s\n'
@@ -364,7 +395,8 @@ def cluster_config(workers):
               '            - key: %s\n'
               '              value: "%s"\n'
               '              effect: %s\n')
-    blocks = [worker % (images[0], ROLE_LABEL, ROLE_SANDBOX, '      %s: "%s"\n' % (CI_LABEL, CI) if index == 0 else '',
+    blocks = [worker % (images[0], ROLE_LABEL, ROLE_SANDBOX,
+                        '      %s: "%s"\n' % (CI_LABEL, CI) if index == 0 and shared_dir is None else '',
                         SANDBOX_TAINT['key'], SANDBOX_TAINT['value'], SANDBOX_TAINT['effect'])
               for index in range(workers)]
     return base.rstrip('\n') + '\n' + ''.join(blocks)
@@ -393,12 +425,25 @@ def topology(run, provider, kind, cluster, env):
     return {'controlPlane': control[0], 'workers': workers}
 
 
+def shared_mounted(run, provider, names):
+    """Whether every node mounts the shared storage directory (a cluster
+    created with --shared-storage); a partial mount is refused."""
+    found = []
+    for name in names:
+        raw = _command(run, [provider, 'inspect', '--format', '{{json .Mounts}}', name]).stdout
+        mounts = json.loads(raw) if raw and raw.strip() else []
+        found.append(any((m.get('Destination') or m.get('destination')) == SHARED_PATH for m in mounts or []))
+    if any(found) and not all(found):
+        raise ValueError('Only some kind nodes mount the shared storage directory')
+    return bool(found) and all(found)
+
+
 def sandbox_nodes(nodes):
     """Nodes that run sandboxed pods: the workers, or the single node."""
     return nodes['workers'] or [nodes['controlPlane']]
 
 
-def schedule(run, kubectl, nodes, ci=None):
+def schedule(run, kubectl, nodes, ci=None, shared=False):
     """Keep sandboxed and CI pods on the workers and the runtime off them.
 
     kind keeps the control-plane taint once a cluster has workers; the runtime
@@ -419,8 +464,12 @@ def schedule(run, kubectl, nodes, ci=None):
         labels = node['metadata'].get('labels', {})
         if labels.get(ROLE_LABEL) != ROLE_SANDBOX:
             _command(run, kubectl + ['label', 'node', worker, '--overwrite', ROLE_LABEL + '=' + ROLE_SANDBOX])
-        # Exactly one CI worker: Tekton pods share node-local claims.
-        if worker == (ci or nodes['workers'][0]) and labels.get(CI_LABEL) != CI:
+        # Exactly one CI worker: Tekton pods share node-local claims. With
+        # shared storage there is none.
+        if shared:
+            if CI_LABEL in labels:
+                _command(run, kubectl + ['label', 'node', worker, CI_LABEL + '-'])
+        elif worker == (ci or nodes['workers'][0]) and labels.get(CI_LABEL) != CI:
             _command(run, kubectl + ['label', 'node', worker, '--overwrite', CI_LABEL + '=' + CI])
         elif worker != (ci or nodes['workers'][0]) and CI_LABEL in labels:
             _command(run, kubectl + ['label', 'node', worker, CI_LABEL + '-'])
@@ -488,13 +537,17 @@ def ci_worker(run, kubectl, nodes):
     return choice
 
 
-def tekton_pod_template():
+def tekton_pod_template(shared=False):
     """Tekton's default pod template on a cluster with workers: every task
     pod runs on the one CI worker. A run's source claim (bound by its checkout
     pod) and the repository's Maven cache are both node-local ReadWriteOnce
     volumes that build-test mounts together; without one shared node they
     bind on different workers and build-test can never schedule. The CI
     worker is prepared like every worker, so build-test (gVisor) runs there."""
+    if shared:
+        # ReadWriteMany caches: a run's pods follow its source claim, bound
+        # by its checkout pod on any sandbox worker.
+        return {'nodeSelector': {ROLE_LABEL: ROLE_SANDBOX}, 'tolerations': [toleration()]}
     return {'nodeSelector': {CI_LABEL: CI}, 'tolerations': [toleration()]}
 
 

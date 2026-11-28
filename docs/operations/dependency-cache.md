@@ -207,6 +207,12 @@ node (for example local-path). On a multi-node cluster with network block
 storage they fail with Multi-Attach errors; use a ReadWriteMany class (NFS,
 CephFS, a cloud file service).
 
+On a kind cluster created with `--workers --shared-storage`, use `prepare
+--storage-class ai-sdlc-shared --access-mode ReadWriteMany`: the sealed
+volume has no node affinity, and the verification runs of one request can
+run on different workers (see
+[shared storage](kind-node-resources.md#worker-nodes)).
+
 On a local kind cluster created with `--workers` (see
 [kind node resources](kind-node-resources.md#worker-nodes)), local-path
 volumes stay ReadWriteOnce and node-bound. The Tekton fill runs on the CI
@@ -222,6 +228,9 @@ pending.
 
 `seal` works as follows:
 - It refuses a claim with another key, and one that a running pod still uses.
+  It also refuses a claim that finished pods still reference, naming them,
+  because PVC protection would keep the work claim deleting until they are
+  gone. Delete them first; for a Tekton run, delete its PipelineRun.
 - It retains the volume, deletes the work claim, rebinds the volume
   (`claimRef`) to `ai-sdlc-verifiers/deps-<key>`, and creates that claim
   already labelled `sealed`. After the claim binds it checks the key, the

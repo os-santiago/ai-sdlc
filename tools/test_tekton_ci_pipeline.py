@@ -1,4 +1,5 @@
 """Render and validate the reviewed Tekton task catalog and its run tool."""
+import copy
 import hashlib
 import ipaddress
 import json
@@ -77,6 +78,11 @@ def termination_message(summary):
     """The step's termination message bytes as Tekton writes them for one result."""
     return ('[{"key":"summary","value":' + go_marshal_string(summary) + ',"type":1},'
             '{"key":"StartedAt","value":"2026-11-27T21:18:36.996Z","type":3}]').encode()
+
+
+def kind_nodes_module():
+    import kind_nodes
+    return kind_nodes
 
 
 class GoMarshalEmulationTests(unittest.TestCase):
@@ -972,6 +978,15 @@ class RunToolTests(unittest.TestCase):
     def test_admission_admits_only_the_exact_ci_worker_placement(self):
         rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
         self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}", rules)
+        self.assertNotIn("'ai-sdlc.io/node-role': 'sandbox'", rules, 'the default policy admits only the CI worker')
+        # Shared storage rewrites the one placement: each mode admits only its own.
+        shared = tekton.shared_placement(copy.deepcopy([by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']]))
+        shared_rules = ' '.join(v['expression'] for v in shared[0]['spec']['validations'])
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/node-role': 'sandbox'}", shared_rules)
+        self.assertNotIn("'ai-sdlc.io/ci-node'", shared_rules)
+        self.assertEqual(kind_nodes_module().tekton_pod_template(True)['nodeSelector'], {'ai-sdlc.io/node-role': 'sandbox'})
+        with self.assertRaises(ValueError):
+            tekton.shared_placement(shared)
         self.assertIn("object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', "
                       "'value': 'true', 'effect': 'NoSchedule'}]", rules)
         import kind_nodes
