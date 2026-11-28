@@ -389,6 +389,8 @@ class InstallerOptionTests(unittest.TestCase):
                                         cache_storage_class='ai-sdlc-shared')
             self.assertIn('shared', calls, 'shared caches admit only the sandbox-worker placement')
             self.assertEqual(shared['cacheStorageClass'], 'ai-sdlc-shared')
+            self.assertRegex(shared['appliedAdmissionPolicySHA256'], r'^[0-9a-f]{64}$')
+            self.assertNotIn('appliedAdmissionPolicySHA256', report)
             del calls[calls.index('verify', 1):]
         self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects',
                                  ('quotas', {'candidate': 1, 'fetch': 1}), 'own',
