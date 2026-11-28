@@ -87,6 +87,20 @@ class DesiredResourceTests(unittest.TestCase):
         self.assertIsNone(kind_nodes.validate_options(SimpleNamespace(command='local', platform='openshift', node_pids_limit=None,
                                                                       node_memory=None, node_cpus=None)))
 
+    def test_cgroup_v1_is_refused_at_validation_for_local_and_sandbox(self):
+        with tempfile.TemporaryDirectory() as root:
+            for command in ('local', 'sandbox'):
+                with self.assertRaisesRegex(ValueError, 'cgroup v1'):
+                    kind_nodes.validate_options(SimpleNamespace(command=command, platform='kind', node_pids_limit=None,
+                                                                node_memory=None, node_cpus=None), Path(root))
+            self.assertIsNotNone(kind_nodes.validate_options(SimpleNamespace(command='plan', platform='kind', node_pids_limit=None,
+                                                                             node_memory=None, node_cpus=None), Path(root)))
+        with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
+             patch.object(install, 'host_prerequisites', side_effect=AssertionError('no host change')), \
+             patch.object(kind_nodes, 'require_cgroup_v2', side_effect=ValueError('cgroup v1 host')), \
+             self.assertRaisesRegex(ValueError, 'cgroup v1'):
+            install.main(['local', '--configure-host'])
+
     def test_installer_rejects_node_options_before_any_tool_runs(self):
         with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
              self.assertRaisesRegex(ValueError, 'kind platform'):

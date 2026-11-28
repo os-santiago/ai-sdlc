@@ -335,6 +335,13 @@ class InstallerOptionTests(unittest.TestCase):
         self.assertEqual(tekton.installed_pod_quotas(run, ['kubectl']), {'candidate': 6, 'fetch': 1})
         self.assertIn('--ignore-not-found', run.call_args.args[0])
         self.assertEqual(tekton.installed_pod_quotas(Mock(return_value=completed('')), ['kubectl']), {'candidate': 0, 'fetch': 0})
+        # A quota lowered while pods still run: the running pods count.
+        lowered = {'items': [{'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': '1'}},
+                              'status': {'used': {'pods': '4'}}},
+                             {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': '2'}},
+                              'status': {'used': {'pods': '0'}}}]}
+        self.assertEqual(tekton.installed_pod_quotas(Mock(return_value=completed(json.dumps(lowered))), ['kubectl']),
+                         {'candidate': 4, 'fetch': 2})
         quotas['items'][0]['spec']['hard']['pods'] = '1Gi'
         with self.assertRaises(ValueError):
             tekton.installed_pod_quotas(Mock(return_value=completed(json.dumps(quotas))), ['kubectl'])

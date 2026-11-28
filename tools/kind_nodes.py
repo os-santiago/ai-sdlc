@@ -214,12 +214,16 @@ def apply(run, provider, cluster, node, want):
             'cpus': observed['cpus'], 'changed': changed}
 
 
-def validate_options(args):
-    """Node resource options apply to kind installations only, before any effect."""
+def validate_options(args, cgroup_root=Path('/sys/fs/cgroup')):
+    """Node resource options apply to kind installations only, before any
+    effect; local and sandbox refuse a cgroup v1 host here, before host
+    prerequisites or cluster creation."""
     given = [name for name in ('node_pids_limit', 'node_memory', 'node_cpus') if getattr(args, name, None) is not None]
     if given and (args.command not in ('plan', 'local', 'sandbox') or args.platform != 'kind'):
         raise ValueError('--node-pids-limit, --node-memory and --node-cpus require plan, local or sandbox on the kind platform')
     if args.platform == 'kind' and args.command in ('plan', 'local', 'sandbox'):
+        if args.command in ('local', 'sandbox'):
+            require_cgroup_v2(cgroup_root)
         return desired(getattr(args, 'node_pids_limit', None), getattr(args, 'node_memory', None),
                        getattr(args, 'node_cpus', None))
     return None
