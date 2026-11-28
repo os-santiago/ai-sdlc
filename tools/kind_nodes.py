@@ -148,6 +148,24 @@ def _cgroup(run, provider, node, name):
 HEADROOM = 1.1
 
 
+def target_limit(current, want):
+    """The pid limit a node is reconciled to: the requested value, or without
+    --node-pids-limit the default unless the node already has a larger one."""
+    if not want.get('pidsLimitExplicit', True) and current is not None and current > want['pidsLimit']:
+        return current
+    return want['pidsLimit']
+
+
+def effective_limit(run, provider, cluster, kind, env, want, names=None):
+    """The smallest pid limit the nodes will have after reconciliation, which
+    is what the pid budget must be checked against."""
+    if names is None:
+        names = _command(run, [kind, 'get', 'nodes', '--name', cluster], env=env, check=True).stdout.split()
+    if not names:
+        raise ValueError('The kind cluster has no nodes')
+    return min(target_limit(inspect(run, provider, name)['pidsLimit'], want) for name in names)
+
+
 def apply(run, provider, cluster, node, want):
     """Set the node container's limits, idempotently, and verify them.
 
@@ -156,23 +174,24 @@ def apply(run, provider, cluster, node, want):
     --node-pids-limit) never lowers a larger limit already set, like omitted
     memory and CPU caps, which are left as they are. Lowering a pid limit or
     memory cap requires the node's current use plus 10% to fit below it. A
-    stored value whose live cgroup differs (drift) is applied again.
+    stored value whose live cgroup differs (drift) is applied again; the pid
+    limit is always written, because podman nests the node's cgroup
+    (libpod-<id>.scope/container) and the live value read inside the node is
+    only the inner level, while an update rewrites both.
     """
     current = inspect(run, provider, node)
     if current['cluster'] != cluster:
         raise ValueError('Kind node container ownership mismatch: ' + node)
-    target = want['pidsLimit']
-    if not want.get('pidsLimitExplicit', True) and current['pidsLimit'] is not None and current['pidsLimit'] > target:
-        target = current['pidsLimit']
+    target = target_limit(current['pidsLimit'], want)
     args = []
     live = _cgroup(run, provider, node, 'pids.max')
-    if current['pidsLimit'] != target or live != str(target):
-        if current['pidsLimit'] is None or current['pidsLimit'] > target or live == 'max' or (live.isdigit() and int(live) > target):
-            used = int(_cgroup(run, provider, node, 'pids.current'))
-            if used * HEADROOM >= target:
-                raise ValueError('Node %s runs %d pids; refusing to lower its pid limit to %d without 10%% headroom'
-                                 % (node, used, target))
-        args += ['--pids-limit', str(target)]
+    changed = current['pidsLimit'] != target or live != str(target)
+    if current['pidsLimit'] is None or current['pidsLimit'] > target or live == 'max' or (live.isdigit() and int(live) > target):
+        used = int(_cgroup(run, provider, node, 'pids.current'))
+        if used * HEADROOM >= target:
+            raise ValueError('Node %s runs %d pids; refusing to lower its pid limit to %d without 10%% headroom'
+                             % (node, used, target))
+    args += ['--pids-limit', str(target)]
     if want.get('memory') and current['memory'] != want['memory']:
         if current['memory'] is None or current['memory'] > want['memory']:
             used = int(_cgroup(run, provider, node, 'memory.current'))
@@ -183,8 +202,8 @@ def apply(run, provider, cluster, node, want):
         args += ['--memory', str(want['memory']), '--memory-swap', str(want['memory'])]
     if want.get('cpus') and current['cpus'] != want['cpus']:
         args += ['--cpus', '%g' % want['cpus']]
-    if args:
-        _command(run, [provider, 'update', *args, node], check=True)
+    changed = changed or len(args) > 2
+    _command(run, [provider, 'update', *args, node], check=True)
     observed = inspect(run, provider, node)
     cgroup = _cgroup(run, provider, node, 'pids.max')
     if (observed['pidsLimit'] != target or cgroup != str(target)
@@ -192,7 +211,7 @@ def apply(run, provider, cluster, node, want):
             or (want.get('cpus') and observed['cpus'] != want['cpus'])):
         raise ValueError('The node container %s did not apply its resource limits' % node)
     return {'node': node, 'pidsLimit': observed['pidsLimit'], 'memory': observed['memory'],
-            'cpus': observed['cpus'], 'changed': bool(args)}
+            'cpus': observed['cpus'], 'changed': changed}
 
 
 def validate_options(args):

@@ -24,9 +24,13 @@ The pid limit is reconciled to `--node-pids-limit` when given. Without the
 option it is raised to the default when lower (or unlimited), and a larger
 limit set earlier is kept, like the memory and CPU caps, which are set when
 requested and left as they are otherwise. Lowering a pid limit or memory cap
-requires the node's current use plus 10% to fit below the new value. A stored
-limit whose live cgroup differs is applied again. The limits need a cgroup v2
-host; a cgroup v1 host is refused before any change.
+requires the node's current use plus 10% to fit below the new value. The pid
+limit is written on every run: podman nests the node in
+`libpod-<id>.scope/container`, so the value visible inside the node is only
+the inner level, and an update rewrites both. The pid budget is checked
+against the smallest limit the nodes will actually have (a kept larger limit
+counts) and reported as `pidBudget.nodePidsLimit`. The limits need a cgroup
+v2 host; a cgroup v1 host is refused before any change.
 `podman update` cannot remove a cap (`--memory 0` and `--cpus 0` leave it in
 place), so to lift one either pass a larger value (up to the host's memory or
 CPU count) or recreate the cluster.

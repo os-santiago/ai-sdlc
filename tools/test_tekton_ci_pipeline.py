@@ -918,6 +918,18 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(upper['spec']['workspaces'][1]['persistentVolumeClaim']['claimName'],
                          tekton.cache_claim('os-santiago/quarkus-super-heroes'))
 
+    def test_main_checks_the_task_limit_before_creating_a_sandboxed_run(self):
+        class Checked(Exception):
+            pass
+        with patch.object(runner, 'connect', return_value=['kubectl']), \
+             patch.object(runner, 'require_runtime_class'), \
+             patch.object(runner, 'sandbox_ready', side_effect=Checked) as ready, \
+             patch.object(runner, 'run', side_effect=AssertionError('no run is created before the check')):
+            with self.assertRaises(Checked):
+                runner.main(['maven-build-test', '--cluster', 'c', '--repository', 'os-santiago/quarkus-super-heroes',
+                             '--revision', SHA, '--module', 'rest-villains'])
+        self.assertEqual(ready.call_args.args, ('c', 768))
+
     def test_sandboxed_runs_require_the_raised_task_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory, 'ai-sdlc/c')

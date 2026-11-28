@@ -556,9 +556,11 @@ def _main(argv, stack):
     node_resources = kind_nodes.validate_options(args)
     node_budget = None
     tekton_quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods) if args.tekton_ci else None
-    if node_resources is not None and args.command in ('plan', 'local'):
+    if node_resources is not None and args.command == 'plan':
         # The node must hold its baseline, one verification run when sandboxed
-        # execution is installed, and every CI pod the quotas admit.
+        # execution is installed, and every CI pod the quotas admit. local
+        # checks before creating a cluster, and a reinstall in reconcile_nodes
+        # against the nodes' effective limit and the installed quotas.
         node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
                                             candidate_pods=(tekton_quotas or {}).get('candidate', 0),
                                             fetch_pods=(tekton_quotas or {}).get('fetch', 0))
@@ -746,6 +748,11 @@ def _main(argv, stack):
         if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
             raise ValueError('The requested local cluster does not exist')
         created = args.cluster not in clusters
+        if created and node_resources is not None and args.command == 'local':
+            # Refuse an impossible budget before creating anything.
+            node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
+                                                candidate_pods=(tekton_quotas or {}).get('candidate', 0),
+                                                fetch_pods=(tekton_quotas or {}).get('fetch', 0))
         if created:
             run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
                  '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
@@ -773,7 +780,10 @@ def _main(argv, stack):
         sandboxed = (args.command == 'sandbox' or args.profile in ('candidate', 'verification') or bool(run(
             kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '--ignore-not-found', '-o', 'name'],
             capture_output=True).stdout.strip()))
-        node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=sandboxed,
+        # A default keeps a larger limit already on a node: budget against
+        # the smallest limit the nodes will actually have.
+        limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources)
+        node_budget = kind_nodes.pid_budget(limit, sandbox=sandboxed,
                                             candidate_pods=max(installed['candidate'], requested.get('candidate', 0)),
                                             fetch_pods=max(installed['fetch'], requested.get('fetch', 0)))
         # Set on creation and reconciled on every later install: podman's
