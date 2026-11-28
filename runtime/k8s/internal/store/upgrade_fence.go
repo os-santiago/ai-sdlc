@@ -59,18 +59,41 @@ var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", 
 // nothing until role provisioning creates that role and grants its columns.
 // 0040 narrows the merge request uniqueness to requests that may have sent
 // (a partial unique index replacing the full one) and admits the not-sent
-// reason. Every other migration needs its own bridge.
-var RelaxationMigrations = []string{"0038_generic_publication_scope.sql", "0039_flow_console_reader.sql", "0040_merge_retry_before_send.sql"}
+// reason. 0041 widens the executor source and export size checks to the
+// larger workspace bundle bound. Every other migration needs its own bridge
+// (see ToolJournalMigrations for the one additive table it admits).
+var RelaxationMigrations = []string{"0038_generic_publication_scope.sql", "0039_flow_console_reader.sql", "0040_merge_retry_before_send.sql", "0041_large_workspace_bounds.sql"}
+
+// ToolJournalMigrations is NOT a relaxation: 0042 adds the tool_calls table,
+// its owner policy and (through role provisioning) worker grants. It is the
+// one additive migration the configuration fence also admits as missing, by
+// this reviewed argument rather than by the relaxation rule:
+//   - the table is created empty and no migration fills it; only a generator
+//     tool call of a claimed execution writes a row (BeginToolCall requires
+//     the claim), so no historical record gains or loses meaning;
+//   - the configuration fence already refuses every claimed or uncleaned
+//     execution and every open model budget or call of the source, so no
+//     generation that could have wanted a journal row is in flight across
+//     the upgrade;
+//   - a source without 0042 has no tool_calls table: the fence locks and
+//     inventories only the source tables (tool_calls is excluded below for
+//     sources older than 42), and the upgrade's own migrator Job creates it.
+//
+// A source of 42 is the current catalog and fences tool_calls too; a started
+// tool call is then in-flight work. A later additive table needs its own
+// review: this list is not a general admission rule for new tables.
+var ToolJournalMigrations = []string{"0042_generator_tool_calls.sql"}
 
 // configurationSource reports whether source is the current catalog, or the
-// current catalog without a suffix of relaxation migrations.
+// current catalog without a suffix made only of relaxation migrations and the
+// reviewed tool journal addition.
 func configurationSource(source []MigrationIdentity) bool {
 	catalog, err := MigrationCatalog()
-	if err != nil || ValidateMigrationSource(source) != nil || len(source) < len(catalog)-len(RelaxationMigrations) {
+	if err != nil || ValidateMigrationSource(source) != nil || len(source) < len(catalog)-len(RelaxationMigrations)-len(ToolJournalMigrations) {
 		return false
 	}
-	for i, migration := range catalog[len(source):] {
-		if migration.Filename != RelaxationMigrations[len(RelaxationMigrations)-len(catalog)+len(source)+i] {
+	for _, migration := range catalog[len(source):] {
+		if !slices.Contains(RelaxationMigrations, migration.Filename) && !slices.Contains(ToolJournalMigrations, migration.Filename) {
 			return false
 		}
 	}
@@ -91,14 +114,20 @@ func scopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback bool
 
 func repairScopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback, repair bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 40 || catalog[39].Filename != "0040_merge_retry_before_send.sql" || catalog[38].Filename != "0039_flow_console_reader.sql" || catalog[37].Filename != "0038_generic_publication_scope.sql" || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
+	if err != nil || len(catalog) != 42 || catalog[41].Filename != "0042_generator_tool_calls.sql" || catalog[40].Filename != "0041_large_workspace_bounds.sql" || catalog[39].Filename != "0040_merge_retry_before_send.sql" || catalog[38].Filename != "0039_flow_console_reader.sql" || catalog[37].Filename != "0038_generic_publication_scope.sql" || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
 		return nil, ErrUpgradeFence
 	}
-	if (repair && len(source) != 36 && len(source) != 37 && len(source) != 38 && len(source) != 39 && len(source) != 40) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
+	// The repair-scoped selection serves the 36-to-37 repair bridge and the
+	// configuration protocol (sources 37 to 42; see configurationSource).
+	if (repair && (len(source) < 36 || len(source) > 42)) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
 		return nil, ErrUpgradeFence
 	}
 	// Historical bridges never admit the new feedback schema or its rows.
 	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return len(source) < 37 && slices.Contains(repairUpgradeTables, s) })
+	// Sources older than 0042 have no tool journal: it is never fenced or admitted.
+	if len(source) < 42 {
+		tables = slices.DeleteFunc(tables, func(s string) bool { return s == "tool_calls" })
+	}
 	if len(source) < 36 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return s == "review_feedback" })
 	}
@@ -203,6 +232,16 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 		if blocked {
 			return ErrUpgradeFenceHistory
 		}
+		// A started tool call is in flight. Only a source that has the
+		// journal (42) fences it; older sources cannot hold a row.
+		if slices.Contains(f.tables, "tool_calls") {
+			if f.tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM public.tool_calls WHERE state='started')`).Scan(&blocked) != nil {
+				return ErrUpgradeFence
+			}
+			if blocked {
+				return ErrUpgradeFenceHistory
+			}
+		}
 		return nil
 	}
 	allowed := map[string]bool{}
@@ -298,7 +337,7 @@ func (db *DB) WithReviewFeedbackUpgradeFence(ctx context.Context, database strin
 // Feedback and all child ledgers must be empty: no historical work gains repair.
 func (db *DB) WithReviewRepairUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
 	// The shared table selection also serves the configuration protocol,
-	// which admits the current 38-, 39- and 40-entry catalogs; this bridge never does.
+	// which admits the 37- to 42-entry catalogs; this bridge admits only 36 and 37.
 	if len(source) != 36 && len(source) != 37 {
 		return ErrUpgradeFence
 	}

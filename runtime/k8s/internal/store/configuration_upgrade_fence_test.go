@@ -15,8 +15,9 @@ import (
 // only in-flight model-dependent work.
 func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t *testing.T) {
 	// The current catalog, and the current catalog without its relaxation
-	// migrations (which the configuration upgrade's migrator job applies).
-	for _, count := range []int{40, 39, 38, 37} {
+	// migrations and the additive tool journal (which the configuration
+	// upgrade's migrator job applies).
+	for _, count := range []int{42, 41, 40, 39, 38, 37} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) { configurationFenceAt(t, count) })
 	}
 }
@@ -27,9 +28,14 @@ func TestConfigurationSourceAdmitsOnlyMissingRelaxations(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 30; n <= len(catalog); n++ {
-		if configurationSource(catalog[:n]) != (n >= len(catalog)-len(RelaxationMigrations)) {
+		if configurationSource(catalog[:n]) != (n >= len(catalog)-len(RelaxationMigrations)-len(ToolJournalMigrations)) {
 			t.Fatal("configuration source", n)
 		}
+	}
+	// 0042 adds a table: it is admitted only by its own reviewed list, never
+	// as a relaxation.
+	if slices.Contains(RelaxationMigrations, "0042_generator_tool_calls.sql") || !slices.Equal(ToolJournalMigrations, []string{catalog[len(catalog)-1].Filename}) {
+		t.Fatal("tool journal migration misclassified")
 	}
 	changed := slices.Clone(catalog)
 	changed[len(changed)-1].SHA256 = strings.Repeat("0", 64)
@@ -64,6 +70,34 @@ func configurationFenceAt(t *testing.T, count int) {
 	tables, err := repairScopedUpgradeFenceTables(source, false, false, true)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The tool journal is fenced only by a source that has it (42).
+	if slices.Contains(tables, "tool_calls") != (count >= 42) {
+		t.Fatal("tool journal fenced by a source without it", count)
+	}
+	if count >= 42 {
+		// A finished or abandoned tool call is history; a started one is in flight.
+		for state, admitted := range map[string]bool{"abandoned": true, "error": true, "started": false} {
+			tx, err := db.Pool.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finished := "clock_timestamp()"
+			if state == "started" {
+				finished = "NULL"
+			}
+			if _, err = tx.Exec(`INSERT INTO tool_calls(allocation_id,sequence,request_sha256,state,finished_at)
+			SELECT id,1,repeat('a',64),$1,`+finished+` FROM model_allocations LIMIT 1`, state); err != nil {
+				tx.Rollback()
+				t.Fatal(state, err)
+			}
+			f := &UpgradeFence{tx: tx, source: source, tables: tables, configurationHistory: true}
+			err = f.inspectHistory(ctx)
+			tx.Rollback()
+			if (err == nil) != admitted || (!admitted && !errors.Is(err, ErrUpgradeFenceHistory)) {
+				t.Fatal("tool call", state, err)
+			}
+		}
 	}
 	history := append(append(slices.Clone(browserUpgradeTables), "review_feedback"), slices.DeleteFunc(slices.Clone(repairUpgradeTables), func(s string) bool { return s == "repair_model_budgets" })...)
 	for _, table := range history {
