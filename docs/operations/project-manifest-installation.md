@@ -14,12 +14,13 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 
 | Section | What to set |
 |---|---|
-| `verification.image` | The toolchain image pinned by digest. Tests run offline, so dependencies must be vendored or in the image |
+| `verification.image` | The toolchain image pinned by digest. Tests run offline, so dependencies must be vendored, in the image, or in a sealed dependency cache (`verification.dependencies`) |
 | `verification.command` | The test command as an argument list, run from the repository root |
 | `verification.result` | `exitCode: true`, plus an optional JUnit `junitPath` for per-test evidence. Without a report the decision is *weak* and the reviewer must judge it |
 | `verification.testGlobs` | The files that count as tests |
 | `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration, and the configuration of any `verification.analysis` tool, such as `.golangci.yml`, so a candidate cannot switch off its own analysis) |
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
+| `verification.dependencies` | Optional read-only dependency cache: `cachePath` (absolute; not under `/workspaces`, `/tmp`, `/runner`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/var/run`, `/var/tmp` or a system binary or library directory) and 1–32 `keyGlobs` naming the dependency-defining files (for Maven `**/pom.xml`, `.mvn/**`, `mvnw`). Key files are always harness files. Omitted when absent, so existing digests do not change. See [the dependency cache](dependency-cache.md) and [`examples/quarkus-super-heroes-rest-villains.project.json`](../../examples/quarkus-super-heroes-rest-villains.project.json) |
 | `verification.services` | Optional backing services (databases, brokers) that the tests reach on `localhost`, in place of Quarkus Dev Services or Testcontainers. See [backing services](#optional-backing-services-for-the-tests) |
 | `verification.analysis` | Optional static analysis: up to 4 argv `commands` and one `timeoutSeconds` (10–300, at most 600 in total), for example `{"commands": [["go", "vet", "./..."]], "timeoutSeconds": 120}`. They run offline in `verification.image`, on the baseline and on the candidate. A command that passes on the baseline and fails on the candidate refuses it (`refused-candidate-analysis`). See the [candidate baseline](../architecture/candidate-quality-baseline.md#static-analysis) |
 | `publication` | The paths a candidate may change, and the file and size limits |

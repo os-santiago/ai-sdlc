@@ -80,6 +80,40 @@ project:
   # Set from the migrator's project installation output; sizes the verifier
   # namespace for the manifest's three concurrent repository-tests runs.
   verifierQuota: {}
+# Optional in-cluster dependency proxy (docs/operations/dependency-cache.md).
+# Off by default: nothing renders. Enabled (installer: --dependency-proxy
+# maven,npm), it creates the ai-sdlc-dependencies namespace with a deny-all
+# policy and one caching proxy (Maven on port 8080, npm on 8081) whose cache
+# is a PersistentVolumeClaim. The proxy is the only pod there with egress
+# (DNS, and HTTPS to the configured upstream hosts only) and accepts only
+# dependency task pods of clientNamespace labelled
+# ai-sdlc.io/ci-egress: dependency-proxy. Verification and test pods never
+# reach it: they stay network=none or deny-all.
+dependencyProxy:
+  enabled: false
+  image: docker.io/nginxinc/nginx-unprivileged@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+  # The namespace of the dependency tasks (the Tekton CI namespace).
+  clientNamespace: ai-sdlc-ci
+  maven:
+    enabled: true
+    # Requests are proxied to https://<upstreamHost>/maven2/ with
+    # certificate verification; artifacts are cached as immutable.
+    upstreamHost: repo.maven.apache.org
+    # Optional allowlist of repository path prefixes (groupId paths ending
+    # in "/", for example "io/quarkus/"). Empty proxies the whole repository.
+    allowedPaths: []
+  npm:
+    enabled: false
+    upstreamHost: registry.npmjs.org
+    # Optional allowlist of package names or whole scopes ("react",
+    # "@types/*"). Empty proxies the whole registry.
+    allowedPackages: []
+    # Pass npm audit's bulk advisory requests (POST, never cached) to the
+    # upstream. They disclose the dependency names and versions of the
+    # audited lockfile to the registry; needed only by npm audit fix.
+    audit: false
+  storageSize: 20Gi
+  storageClass: ""
 migrator:
   enabled: true
   digest: ""

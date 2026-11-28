@@ -720,6 +720,116 @@ class ProjectManifestChartTests(unittest.TestCase):
             self.assertNotEqual(tests.sandbox_docs({'project': {'manifestJSON': bad}})[0].returncode, 0, bad)
         self.assertNotIn('executorQuota', (ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/values.yaml').read_text())
 
+    def test_verifier_reads_dependency_caches_only_with_a_dependencies_section(self):
+        """The claim read is granted only when manifestJSON declares
+        verification.dependencies, and it is get-only."""
+        tests = ChartTests()
+        base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
+        def rules(verification):
+            manifest = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}
+            if verification is not None:
+                manifest['verification'] = verification
+            with tempfile.NamedTemporaryFile('w', suffix='.yaml') as file:
+                yaml.safe_dump({'project': {'manifestJSON': json.dumps(manifest, separators=(',', ':'))}}, file)
+                file.flush()
+                rendered = tests.render(*base, '-f', file.name)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            role = next(d for d in yaml.safe_load_all(rendered.stdout)
+                        if d and d['kind'] == 'Role' and d['metadata']['name'] == 'verification-controller')
+            return [rule for rule in role['rules'] if 'persistentvolumeclaims' in rule['resources']]
+        self.assertEqual(rules(None), [])
+        self.assertEqual(rules({'image': 'x'}), [])
+        self.assertEqual(rules({'dependencies': None}), [])
+        self.assertEqual(rules({'dependencies': {'cachePath': '/deps', 'keyGlobs': ['**/pom.xml']}}),
+                         [{'apiGroups': [''], 'resources': ['persistentvolumeclaims'], 'verbs': ['get']}])
+        self.assertNotEqual(tests.render(*base, '--set-string', 'project.manifestJSON=[1]').returncode, 0)
+
+    def test_dependency_proxy_is_the_only_egress_and_renders_only_when_enabled(self):
+        tests = ChartTests()
+        def docs(*args):
+            rendered = tests.render(*args)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            return [d for d in yaml.safe_load_all(rendered.stdout) if d and d['metadata'].get('namespace', d['metadata']['name']) == 'ai-sdlc-dependencies']
+        self.assertEqual(docs(), [])
+        objects = {d['kind'] + '/' + d['metadata']['name']: d for d in docs(
+            '--set', 'dependencyProxy.enabled=true', '--set', 'dependencyProxy.npm.enabled=true')}
+        self.assertEqual(set(objects), {'ConfigMap/dependency-proxy', 'Deployment/dependency-proxy', 'Namespace/ai-sdlc-dependencies',
+                                           'NetworkPolicy/dependency-proxy', 'NetworkPolicy/deny-all',
+                                           'PersistentVolumeClaim/dependency-proxy-cache', 'Service/dependency-proxy'})
+        self.assertEqual(objects['NetworkPolicy/deny-all']['spec'], {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']})
+        policy = objects['NetworkPolicy/dependency-proxy']['spec']
+        self.assertEqual(policy['ingress'], [{'from': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ai-sdlc-ci'}},
+                                                        'podSelector': {'matchLabels': {'ai-sdlc.io/ci-egress': 'dependency-proxy'}}}],
+                                              'ports': [{'protocol': 'TCP', 'port': 8080}, {'protocol': 'TCP', 'port': 8081}]}])
+        https = [rule for rule in policy['egress'] if any('ipBlock' in peer for peer in rule['to'])]
+        self.assertEqual(len(https), 1)
+        self.assertEqual(https[0]['ports'], [{'protocol': 'TCP', 'port': 443}])
+        self.assertIn('10.0.0.0/8', https[0]['to'][0]['ipBlock']['except'])
+        pod = objects['Deployment/dependency-proxy']['spec']['template']['spec']
+        self.assertIs(pod['automountServiceAccountToken'], False)
+        self.assertRegex(pod['containers'][0]['image'], r'@sha256:[a-f0-9]{64}$')
+        self.assertIs(pod['containers'][0]['securityContext']['readOnlyRootFilesystem'], True)
+        data = objects['ConfigMap/dependency-proxy']['data']
+        config = data['nginx.conf']
+        for line in ('proxy_ssl_verify on;', 'proxy_pass_request_headers off;', 'proxy_pass_request_body off;',
+                     'limit_except GET { deny all; }', 'location / { return 403; }', 'include /tmp/resolver.conf;',
+                     'set $upstream https://repo.maven.apache.org;', 'set $upstream https://registry.npmjs.org;',
+                     'location ^~ /-/ { return 403; }'):
+            self.assertIn(line, config)
+        self.assertNotIn('advisories/bulk', config)
+        self.assertIn('resolver ${NGINX_LOCAL_RESOLVERS}', data['resolver.conf.template'])
+        # Every proxying location forwards the normalized URI through the
+        # re-resolving variable and includes its ecosystem's header reset,
+        # so no client header or credential reaches the upstream or the cache.
+        blocks = config.split('location ')
+        proxying = [b for b in blocks if 'proxy_pass ' in b.split('location ~ /maven-metadata')[0]]
+        self.assertEqual(len(proxying), 4)
+        for block in blocks:
+            body = block.split('location ~ /maven-metadata')[0]
+            if 'proxy_pass ' not in body:
+                continue
+            self.assertIn('proxy_pass $upstream$uri;', body)
+            self.assertRegex(body, r'include /etc/nginx/ai-sdlc/(maven|npm)-request\.conf;')
+        for name, host in (('maven-request.conf', 'repo.maven.apache.org'), ('npm-request.conf', 'registry.npmjs.org')):
+            for line in ('proxy_set_header Host %s;' % host, 'proxy_set_header Authorization "";', 'proxy_set_header Cookie "";',
+                         'proxy_set_header Accept-Encoding "";'):
+                self.assertIn(line, data[name])
+        self.assertEqual(config.count('include /etc/nginx/ai-sdlc/request-filter.conf;'), 2)
+        self.assertIn('if ($request_uri ~ "[?#]") { return 403; }', data['request-filter.conf'])
+        self.assertIn('if ($bodied_read) { return 403; }', data['request-filter.conf'])
+        self.assertIn('"~^(GET|HEAD):.+" 1;', config)
+        self.assertIn('max_size=18432m', config)
+        self.assertEqual(config.count('proxy_cache_key "maven$upstream$uri";'), 2)
+        self.assertIn('proxy_cache_key "npm$upstream$uri";', config)
+        self.assertIn('proxy_cache_key "npm$upstream$uri|$http_accept";', config)
+        self.assertEqual(pod['securityContext']['runAsUser'], 101)
+        openshift = {d['kind'] + '/' + d['metadata']['name']: d for d in docs(
+            '--set', 'dependencyProxy.enabled=true', '--set', 'openshift.enabled=true')}
+        self.assertEqual(openshift['Deployment/dependency-proxy']['spec']['template']['spec']['securityContext'],
+                         {'runAsNonRoot': True, 'seccompProfile': {'type': 'RuntimeDefault'}})
+        container = pod['containers'][0]
+        self.assertEqual(container['args'][:3], ['nginx', '-c', '/etc/nginx/ai-sdlc/nginx.conf'])
+        self.assertIn({'name': 'NGINX_ENTRYPOINT_LOCAL_RESOLVERS', 'value': '1'}, container['env'])
+        self.assertIn('198.18.0.0/15', https[0]['to'][0]['ipBlock']['except'])
+        self.assertEqual([p['port'] for p in objects['Service/dependency-proxy']['spec']['ports']], [8080, 8081])
+        maven_only = {d['kind'] + '/' + d['metadata']['name']: d for d in docs('--set', 'dependencyProxy.enabled=true',
+                      '--set', 'dependencyProxy.maven.allowedPaths={io/quarkus/,org/apache/maven/}')}
+        config = maven_only['ConfigMap/dependency-proxy']['data']['nginx.conf']
+        self.assertNotIn('npm-request.conf', maven_only['ConfigMap/dependency-proxy']['data'])
+        self.assertIn('location ~ ^/maven2/(io/quarkus/|org/apache/maven/) {', config)
+        self.assertNotIn('listen 8081', config)
+        self.assertEqual([p['port'] for p in maven_only['Service/dependency-proxy']['spec']['ports']], [8080])
+        audit = {d['kind'] + '/' + d['metadata']['name']: d for d in docs('--set', 'dependencyProxy.enabled=true', '--set', 'dependencyProxy.maven.enabled=false',
+                 '--set', 'dependencyProxy.npm.enabled=true', '--set', 'dependencyProxy.npm.audit=true', '--set', 'dependencyProxy.npm.allowedPackages={react,@types/*}')}
+        config = audit['ConfigMap/dependency-proxy']['data']['nginx.conf']
+        self.assertIn('location = /-/npm/v1/security/advisories/bulk {', config)
+        self.assertIn('location ~ ^/(react|@types/[^/]+)$ {', config)
+        self.assertNotIn('listen 8080', config)
+        for bad in (['--set', 'dependencyProxy.image=nginx:latest'], ['--set', 'dependencyProxy.maven.upstreamHost=evil/path'],
+                    ['--set', 'dependencyProxy.maven.allowedPaths={../x/}'], ['--set', 'dependencyProxy.maven.enabled=false'],
+                    ['--set', 'dependencyProxy.npm.allowedPackages={a|b}'], ['--set', 'dependencyProxy.storageSize=1Ti']):
+            self.assertNotEqual(tests.render('--set', 'dependencyProxy.enabled=true', *bad).returncode, 0, bad)
+
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
         tests = ChartTests()
         manifest = json.dumps({'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}, separators=(',', ':'))

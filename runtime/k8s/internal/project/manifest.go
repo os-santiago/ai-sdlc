@@ -40,6 +40,9 @@ type Manifest struct {
 	// part of Verification, because the verifier's settings digest encodes
 	// Verification.
 	Generation *Generation `json:"generation,omitempty"`
+	// Tekton is optional and omitted when absent (canonical form and digest
+	// unchanged); see tekton.go.
+	Tekton *Tekton `json:"tekton,omitempty"`
 }
 
 // Verification runs the repository's own tests in the sandboxed verifier.
@@ -66,6 +69,10 @@ type Verification struct {
 	// Analysis is optional static analysis, omitted when absent so manifests
 	// without it keep their canonical form, digest and verifier settings.
 	Analysis *Analysis `json:"analysis,omitempty"`
+	// Dependencies is an optional read-only dependency cache, omitted when
+	// absent so manifests without it keep their canonical form, digest and
+	// verifier settings. See dependencies.go.
+	Dependencies *Dependencies `json:"dependencies,omitempty"`
 	// Services are optional backing services the tests reach over the pod's
 	// loopback (see Service). Omitted when absent, so manifests without
 	// them keep their canonical form, digest and verifier settings.
@@ -570,6 +577,9 @@ func (m Manifest) Validate() error {
 			}
 		}
 	}
+	if m.Tekton != nil && m.Tekton.validate(m) != nil {
+		return ErrManifest
+	}
 	if m.Publication.validate() != nil || m.Merge.validate() != nil || len(m.Recipes) > 8 {
 		return ErrManifest
 	}
@@ -622,6 +632,9 @@ func (v Verification) validate() error {
 		return ErrManifest
 	}
 	if v.Analysis != nil && v.Analysis.validate(v.WorkingDir) != nil {
+		return ErrManifest
+	}
+	if v.Dependencies != nil && v.Dependencies.validate() != nil {
 		return ErrManifest
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {
@@ -701,7 +714,9 @@ func (v Verification) MatchesHarness(file string) bool {
 			return true
 		}
 	}
-	return false
+	// The files that define the dependency set are always harness: the
+	// cache was filled, with network access, from the base revision's.
+	return v.MatchesDependencies(file)
 }
 
 // MatchesTest reports whether a path is one of the repository's test files.

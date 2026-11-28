@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.request
 
@@ -20,6 +21,7 @@ MANIFESTS = ROOT / 'runtime/k8s/deploy/local/offline-runtime'
 PREFIX = '/opt/ai-sdlc/gvisor-release-20261109.0'
 SHIM_CONFIG = '/etc/containerd/ai-sdlc-offline.toml'
 NODE_CONFIG = '/etc/containerd/config.toml'
+TASKS_DROPIN = '/etc/systemd/system.conf.d/ai-sdlc-offline-tasks.conf'
 HANDLER = 'ai-sdlc-offline'
 
 
@@ -110,6 +112,136 @@ def node_configuration(current, fragment):
     desired = current.rstrip() + '\n\n' + fragment
     tomllib.loads(desired)
     return desired
+
+
+DROPIN_MARK = '# AI-SDLC offline runtime:'
+KUBELET_CONFIG = '/var/lib/kubelet/config.yaml'
+KUBELET_MARK = '# AI-SDLC offline runtime: bounded pids per pod'
+
+
+def node_pid_limit(read):
+    """The kind node container's own pid limit, or None when unlimited."""
+    value = (read('/sys/fs/cgroup/pids.max') or '').strip()
+    if value == 'max':
+        return None
+    if not value.isdigit():
+        raise ValueError('Cannot read the kind node pid limit')
+    return int(value)
+
+
+def sandbox_task_limit(read, write, command, node_exec):
+    """Make the node's per-scope task limit fit sandboxed pods, idempotently.
+
+    gVisor runs every container of a pod (the sandbox, gofers and systrap
+    stubs) inside the scope of the pod's first container, and systemd caps
+    each container scope at DefaultTasksMax, 15% of the node's pid limit
+    (307 for a kind node under podman's default of 2048). A Tekton task pod
+    with three or more containers exceeded it and the sandbox died with
+    "failed to create new OS thread". The reviewed drop-in sets the value
+    measured for a sandboxed Maven build (603 tasks) plus a margin. It only
+    ever raises the default: a node without a pid limit (docker) already has
+    a larger default and gets no drop-in. The value must stay at or below half
+    the node's pid limit. An earlier ai-sdlc drop-in is replaced (upgrade or
+    change); a foreign one is refused. It applies to every container scope
+    created afterwards, sandboxed or not; every pod is also bounded by the
+    kubelet podPidsLimit (pod_pid_limit).
+    """
+    desired = (MANIFESTS / 'systemd-tasks.conf').read_text()
+    expected = int(next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax=')))
+    limit = node_pid_limit(read)
+    if limit is not None and expected * 2 > limit:
+        raise ValueError('The kind node pid limit is too small for sandboxed pods')
+    current = read(TASKS_DROPIN)
+    if current is not None and not current.startswith(DROPIN_MARK):
+        raise ValueError('Conflicting systemd task limit drop-in on the kind node')
+
+    def shown():
+        value = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
+        return None if value == 'infinity' else int(value)
+    observed = shown()
+    if current is None and (observed is None or observed >= expected):
+        return observed if observed is not None else limit
+    if current != desired:
+        command(node_exec + ['mkdir', '-p', '/etc/systemd/system.conf.d'])
+        write(TASKS_DROPIN, desired)
+    if observed != expected:
+        # Re-executing the manager applies the default to scopes created
+        # afterwards; running containers keep their limits.
+        command(node_exec + ['systemctl', 'daemon-reexec'])
+        observed = shown()
+    if observed != expected:
+        raise ValueError('The kind node did not apply the sandbox task limit')
+    return observed
+
+
+def pod_pid_limit(read, write, command, node_exec, configz):
+    """Bound every pod's pids with the kubelet podPidsLimit, idempotently and atomically.
+
+    New clusters get it from deploy/local/kind.yaml. On an existing node the
+    installer stages the kubelet configuration with the reviewed value,
+    checks the staged file is exactly the original plus that value, moves it
+    into place, restarts the kubelet and confirms through the node's /configz
+    that the value is in effect; on any failure it restores the original file
+    and restarts the kubelet again. A value ai-sdlc set before (marked, or an
+    earlier reviewed value) is upgraded; any other value is refused. Pods
+    created before the change keep running without the bound until they are
+    recreated.
+    """
+    policy = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())
+    expected, previous = policy['podPidsLimit'], set(policy.get('previous', []))
+    config = read(KUBELET_CONFIG)
+    if config is None:
+        raise ValueError('Kubelet configuration is unavailable on the kind node')
+    lines = config.splitlines()
+    values = [line for line in lines if line.startswith('podPidsLimit:')]
+    if values == ['podPidsLimit: ' + str(expected)]:
+        if configz() != expected:
+            # The file holds the value but the running kubelet does not (for
+            # example an earlier run stopped after the move, before the
+            # restart): restart it and check again.
+            command(node_exec + ['systemctl', 'restart', 'kubelet'])
+            if configz() != expected:
+                raise ValueError('The kubelet does not report the configured podPidsLimit after a restart')
+        return expected
+    ours = KUBELET_MARK in lines or (len(values) == 1 and values[0].split(':', 1)[1].strip().isdigit()
+                                     and int(values[0].split(':', 1)[1]) in previous)
+    if values and not ours:
+        raise ValueError('The kind node kubelet already sets a different podPidsLimit')
+    kept = [line for line in lines if line != KUBELET_MARK and not line.startswith('podPidsLimit:')]
+    desired = '\n'.join(kept + [KUBELET_MARK, 'podPidsLimit: ' + str(expected)]) + '\n'
+    stage = KUBELET_CONFIG + '.ai-sdlc-' + secrets.token_hex(6)
+    write(stage, desired)
+    try:
+        staged = read(stage)
+        if staged != desired or [line for line in staged.splitlines() if line not in (KUBELET_MARK, 'podPidsLimit: ' + str(expected))] != kept:
+            raise ValueError('Staged kubelet configuration differs from the reviewed change')
+        if read(KUBELET_CONFIG) != config:
+            raise ValueError('Kubelet configuration changed concurrently; no replacement applied')
+        command(node_exec + ['mv', '-T', stage, KUBELET_CONFIG])
+    finally:
+        command(node_exec + ['rm', '-f', '--', stage])
+    try:
+        command(node_exec + ['systemctl', 'restart', 'kubelet'])
+        observed = configz()
+        if observed != expected:
+            raise ValueError('The kubelet reports podPidsLimit ' + str(observed))
+    except (ValueError, subprocess.SubprocessError, OSError):
+        write(stage, config)
+        command(node_exec + ['mv', '-T', stage, KUBELET_CONFIG])
+        command(node_exec + ['systemctl', 'restart', 'kubelet'])
+        raise ValueError('The kubelet did not apply podPidsLimit; its prior configuration was restored')
+    return expected
+
+
+def kubelet_configz(kubectl, node, command, attempts=30, sleep=time.sleep):
+    """podPidsLimit as the running kubelet reports it through /configz."""
+    for _ in range(attempts):
+        try:
+            raw = command(kubectl + ['get', '--raw', '/api/v1/nodes/' + node + '/proxy/configz'])
+            return json.loads(raw).get('kubeletconfig', {}).get('podPidsLimit')
+        except (subprocess.SubprocessError, ValueError, OSError):
+            sleep(2)
+    raise ValueError('The kubelet /configz did not answer after the restart')
 
 
 def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
@@ -203,6 +335,9 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
         finally:
             command(node_exec + ['rm', '-f', '--', stage])
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
+    pods_max = pod_pid_limit(read, write, command, node_exec, lambda: kubelet_configz(kubectl, node, command))
+    command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
+    tasks_max = sandbox_task_limit(read, write, command, node_exec)
     runtime_class = json.loads((MANIFESTS / 'runtimeclass.json').read_text())
     runtime_class['metadata']['annotations'] = {'ai-sdlc.io/cluster-uid': cluster_uid}
     if not existing_class:
@@ -215,4 +350,4 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
             'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'archiveSHA256': lock['sha256'], 'configurationSHA256': sha256(shim.encode()),
             'handlerConfigurationSHA256': sha256(fragment.encode()),
-            'network': 'none', 'verification': result, 'autonomousExecutionEnabled': False}
+            'network': 'none', 'scopeTasksMax': tasks_max, 'podPidsLimit': pods_max, 'verification': result, 'autonomousExecutionEnabled': False}

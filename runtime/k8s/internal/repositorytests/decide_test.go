@@ -269,3 +269,19 @@ func TestParseRunBoundsAnalysisCodes(t *testing.T) {
 		}
 	}
 }
+
+// A dependency-defining file is harness even when harnessGlobs omit it: the
+// cache the runs read was prefetched from the base revision's files.
+func TestChangingADependencyFileIsAHarnessChange(t *testing.T) {
+	v := verification(true, 2)
+	v.Dependencies = &project.Dependencies{CachePath: "/deps", KeyGlobs: []string{"**/pom.xml", ".mvn/**"}}
+	for _, path := range []string{"pom.xml", "module/pom.xml", ".mvn/maven.config"} {
+		d := Decide(v, Evidence{Baseline: baseline, Cross: cross, Candidate: runs(2, candidate), Changes: append(append([]Change{}, changes...), Change{Path: path})})
+		if d.Passed || d.Reason != "harness-changed" {
+			t.Fatal(path, d)
+		}
+	}
+	if d := Decide(v, Evidence{Baseline: baseline, Cross: cross, Candidate: runs(2, candidate), Changes: changes}); !d.Passed {
+		t.Fatal("a source change was refused", d)
+	}
+}

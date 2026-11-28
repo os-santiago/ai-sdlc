@@ -37,3 +37,6 @@ e230101d596e7639432a8198639f74cc6dd656f0:tools/verify_build_admission.py:generic
 # sources build it from parts so no detector matches.
 7efa63c7a5e57844134903ea369d93bc87e98093:tools/test_helm_chart_backup.py:generic-api-key:404
 7efa63c7a5e57844134903ea369d93bc87e98093:tools/test_helm_chart_backup.py:generic-api-key:429
+# Dependency-key test vector (a sha256 of synthetic files) in a constant once
+# named GO_KEY (PR #847); current sources name it GO_VECTOR.
+61e3fef0c5ca4fce603b390611492de124fa7a4a:tools/test_dependency_cache_install.py:generic-api-key:19
