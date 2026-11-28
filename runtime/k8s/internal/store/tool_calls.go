@@ -21,6 +21,7 @@ var ErrToolCall = errors.New("tool call journal transition refused")
 // digests are journaled: never the tool input, diff, summary body or logs.
 type ToolCallRecord struct {
 	PipelineRun   string // the PipelineRun name; empty only for an error before it existed
+	ConfigMap     string // the candidate ConfigMap name; empty without a diff
 	Revision      string // the 40-hex base revision the run used
 	Tree          string // the 40-hex tree after the candidate diff; empty without a diff
 	SummarySHA256 string // sha256 of the bounded summary
@@ -28,6 +29,7 @@ type ToolCallRecord struct {
 }
 
 var toolPipelineRun = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+var toolConfigMap = regexp.MustCompile(`^ai-sdlc-candidate-[0-9a-f]{16}-[0-9a-z]{6}$`)
 
 func optional(value string, pattern *regexp.Regexp) bool {
 	return value == "" || pattern.MatchString(value)
@@ -35,7 +37,7 @@ func optional(value string, pattern *regexp.Regexp) bool {
 
 // Validate mirrors the table CHECKs so a refusal never depends on a SQL error.
 func (r ToolCallRecord) Validate() error {
-	if !optional(r.PipelineRun, toolPipelineRun) || !optional(r.Revision, modelSHA) || !optional(r.Tree, modelSHA) || !optional(r.SummarySHA256, modelDigest) {
+	if !optional(r.PipelineRun, toolPipelineRun) || !optional(r.ConfigMap, toolConfigMap) || !optional(r.Revision, modelSHA) || !optional(r.Tree, modelSHA) || !optional(r.SummarySHA256, modelDigest) {
 		return ErrToolCall
 	}
 	switch r.State {
@@ -104,8 +106,35 @@ func (db *DB) FinishToolCall(ctx context.Context, allocationID string, sequence 
 	if AssertComponent(ctx, db.Pool, "worker") != nil {
 		return ErrToolCall
 	}
-	result, err := db.Pool.ExecContext(ctx, `UPDATE tool_calls SET state=$3,pipeline_run=$4,revision=$5,tree=$6,summary_sha256=$7,finished_at=clock_timestamp()
- WHERE allocation_id=$1 AND sequence=$2 AND state='started'`, allocationID, sequence, r.State, r.PipelineRun, r.Revision, r.Tree, r.SummarySHA256)
+	// Names recorded while started are kept and must not change.
+	result, err := db.Pool.ExecContext(ctx, `UPDATE tool_calls SET state=$3,pipeline_run=$4,revision=$5,tree=$6,summary_sha256=$7,config_map=$8,finished_at=clock_timestamp()
+ WHERE allocation_id=$1 AND sequence=$2 AND state='started' AND pipeline_run IN ('',$4) AND config_map IN ('',$8)`,
+		allocationID, sequence, r.State, r.PipelineRun, r.Revision, r.Tree, r.SummarySHA256, r.ConfigMap)
+	if err != nil {
+		return ErrToolCall
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return ErrToolCall
+	}
+	return nil
+}
+
+// RecordToolCallObjects records the names of a started call's objects as soon
+// as each exists: the candidate ConfigMap first, then the PipelineRun. Each
+// name is set once; a recorded name never changes.
+func (db *DB) RecordToolCallObjects(ctx context.Context, allocationID string, sequence int, pipelineRun, configMap string) error {
+	if !modelUUID.MatchString(allocationID) || sequence < 1 || sequence > MaxToolCalls || !optional(pipelineRun, toolPipelineRun) ||
+		!optional(configMap, toolConfigMap) || (pipelineRun == "" && configMap == "") {
+		return ErrToolCall
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if AssertComponent(ctx, db.Pool, "worker") != nil {
+		return ErrToolCall
+	}
+	result, err := db.Pool.ExecContext(ctx, `UPDATE tool_calls SET pipeline_run=CASE WHEN $3='' THEN pipeline_run ELSE $3 END,config_map=CASE WHEN $4='' THEN config_map ELSE $4 END
+ WHERE allocation_id=$1 AND sequence=$2 AND state='started' AND ($3='' OR pipeline_run IN ('',$3)) AND ($4='' OR config_map IN ('',$4))`,
+		allocationID, sequence, pipelineRun, configMap)
 	if err != nil {
 		return ErrToolCall
 	}

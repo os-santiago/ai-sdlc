@@ -177,7 +177,11 @@ func (j storeToolJournal) Begin(ctx context.Context, requestDigest string) (int,
 	return j.db.BeginToolCall(ctx, j.allocationID, requestDigest)
 }
 
+func (j storeToolJournal) Created(ctx context.Context, sequence int, pipelineRun, configMap string) error {
+	return j.db.RecordToolCallObjects(ctx, j.allocationID, sequence, pipelineRun, configMap)
+}
+
 func (j storeToolJournal) Finish(ctx context.Context, sequence int, r tektontasks.ToolRecord) error {
-	return j.db.FinishToolCall(ctx, j.allocationID, sequence, store.ToolCallRecord{PipelineRun: r.PipelineRun, Revision: r.Revision,
+	return j.db.FinishToolCall(ctx, j.allocationID, sequence, store.ToolCallRecord{PipelineRun: r.PipelineRun, ConfigMap: r.ConfigMap, Revision: r.Revision,
 		Tree: r.Tree, SummarySHA256: r.SummarySHA256, State: r.State})
 }

@@ -13,7 +13,7 @@ import (
 )
 
 var spec = Spec{Tools: []Tool{{Name: "build_test", Kind: "maven-build-test", Targets: []string{"rest-villains"}},
-	{Name: "npm_lock_update", Kind: "npm-lock-update", Targets: []string{"ui/web"}}}}
+	{Name: "build_test_two", Kind: "maven-build-test", Targets: []string{"rest-heroes"}}}}
 
 func exchange(t *testing.T, lines []string, relay Relay) []map[string]any {
 	t.Helper()
@@ -102,10 +102,30 @@ func TestServerReportsRelayFailuresAsToolErrors(t *testing.T) {
 	}
 }
 
+// A diff within its byte bound can still exceed the mailbox request bound
+// once JSON-escaped; the generator gets a clear refusal, nothing is relayed.
+func TestServerRefusesAnEncodedRequestBeyondTheMailboxBound(t *testing.T) {
+	var out bytes.Buffer
+	candidate := func(context.Context) (string, error) { return strings.Repeat("\x01", 200*1024), nil }
+	relay := func(context.Context, []byte) (int, []byte, error) {
+		t.Fatal("relayed an oversized request")
+		return 0, nil, nil
+	}
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_test","arguments":{"target":"rest-villains"}}}` + "\n"
+	if err := Serve(context.Background(), strings.NewReader(call), &out, spec, candidate, relay); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "too large to send") || !strings.Contains(out.String(), `"isError":true`) {
+		t.Fatal(out.String())
+	}
+}
+
 func TestSpecValidation(t *testing.T) {
 	for _, bad := range []Spec{{}, {Tools: []Tool{{Name: "Build", Kind: "maven-build-test", Targets: []string{"m"}}}},
 		{Tools: []Tool{{Name: "b", Kind: "shell", Targets: []string{"m"}}}}, {Tools: []Tool{{Name: "b", Kind: "maven-build-test", Targets: []string{"../m"}}}},
-		{Tools: []Tool{{Name: "b", Kind: "maven-build-test"}}}} {
+		{Tools: []Tool{{Name: "b", Kind: "maven-build-test"}}},
+		// npm takes no candidate under the fetch egress until slice 3.
+		{Tools: []Tool{{Name: "npm_lock_update", Kind: "npm-lock-update", Targets: []string{"ui/web"}}}}} {
 		if bad.Validate() == nil {
 			t.Fatal("accepted", bad)
 		}

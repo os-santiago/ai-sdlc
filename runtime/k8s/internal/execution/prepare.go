@@ -301,14 +301,19 @@ func WorkspaceFor(repository, projectSHA256 string) string {
 }
 
 // ToolSpecOf renders the manifest's tekton.tools as the generator tool spec:
-// each tool with the targets its pipeline accepts (the declared Maven modules
-// or npm directories). Nil when the manifest declares no tools.
+// each tool with the targets its pipeline accepts (the declared Maven
+// modules). Nil when the manifest declares no usable tools. npm tools are not
+// offered: npm-lock-update takes no candidate until its egress is proxy-only
+// and non-registry specs and hosts are refused (slice 3).
 func ToolSpecOf(m project.Manifest) *generatortools.Spec {
 	if m.Tekton == nil || len(m.Tekton.Tools) == 0 {
 		return nil
 	}
 	spec := &generatortools.Spec{}
 	for _, tool := range m.Tekton.Tools {
+		if !generatortools.Offered(tool.Pipeline) {
+			continue
+		}
 		var targets []string
 		switch project.TektonTargetKind(tool.Pipeline) {
 		case "module":
@@ -321,7 +326,7 @@ func ToolSpecOf(m project.Manifest) *generatortools.Spec {
 		}
 		spec.Tools = append(spec.Tools, generatortools.Tool{Name: tool.Name, Kind: tool.Pipeline, Targets: targets})
 	}
-	if spec.Validate() != nil {
+	if len(spec.Tools) == 0 || spec.Validate() != nil {
 		return nil
 	}
 	return spec

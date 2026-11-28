@@ -263,7 +263,7 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(sorted((d['kind'], d['metadata']['namespace']) for d in docs), [('Role', 'ai-sdlc-ci'), ('RoleBinding', 'ai-sdlc-ci')])
         role = next(d for d in docs if d['kind'] == 'Role')
         self.assertEqual(role['rules'], [{'apiGroups': ['tekton.dev'], 'resources': ['pipelineruns'], 'verbs': ['create', 'get', 'patch']},
-                                         {'apiGroups': [''], 'resources': ['configmaps'], 'verbs': ['create', 'patch', 'delete']}])
+                                         {'apiGroups': [''], 'resources': ['configmaps'], 'verbs': ['create', 'patch', 'delete', 'list']}])
         binding = next(d for d in docs if d['kind'] == 'RoleBinding')
         self.assertEqual(binding['subjects'], [{'kind': 'ServiceAccount', 'name': 'ai-sdlc-execution-controller', 'namespace': 'ai-sdlc-runtime'}])
         maintenance = self.render('--set', 'candidate.generatorTools=true')

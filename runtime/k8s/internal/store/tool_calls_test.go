@@ -220,8 +220,8 @@ func TestToolCallTableChecksBindFieldsToState(t *testing.T) {
 	now := time.Now()
 	for name, row := range map[string][]any{
 		"started finished":       {"started", "", "", "", now},
-		"started with identity":  {"started", "run", "", "", nil},
-		"abandoned with run":     {"abandoned", "run", "", "", now},
+		"started with outcome":   {"started", "run", strings.Repeat("a", 40), "", nil},
+		"abandoned with outcome": {"abandoned", "run", "", strings.Repeat("c", 64), now},
 		"abandoned unfinished":   {"abandoned", "", "", "", nil},
 		"passed without summary": {"passed", "run", strings.Repeat("a", 40), "", now},
 		"failed without run":     {"failed", "", strings.Repeat("a", 40), strings.Repeat("c", 64), now},
@@ -235,6 +235,49 @@ func TestToolCallTableChecksBindFieldsToState(t *testing.T) {
 	}
 	if _, err := db.Pool.Exec(insert, a.ID, "error", "", "", "", now); err != nil {
 		t.Fatal("error before a run refused", err)
+	}
+	if _, err := db.Pool.Exec(`INSERT INTO tool_calls(allocation_id,sequence,request_sha256,config_map) VALUES($1,2,repeat('a',64),'other')`, a.ID); err == nil {
+		t.Fatal("a ConfigMap name outside the candidate pattern was admitted")
+	} else {
+		requireSQLState(t, err, "23514")
+	}
+}
+
+// Object names are journaled as soon as each exists, set once, kept by
+// recovery, and must match at finish.
+func TestToolCallObjectsAreRecordedOnceAndKept(t *testing.T) {
+	db, worker, a, request := toolCallFixture(t)
+	ctx := context.Background()
+	cm := "ai-sdlc-candidate-0123456789abcdef-abc123"
+	if _, err := worker.BeginToolCall(ctx, a.ID, strings.Repeat("d", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.RecordToolCallObjects(ctx, a.ID, 1, "", cm); err != nil {
+		t.Fatal("config map", err)
+	}
+	if err := worker.RecordToolCallObjects(ctx, a.ID, 1, "build-test-x1", cm); err != nil {
+		t.Fatal("pipeline run", err)
+	}
+	for _, change := range [][2]string{{"build-test-x2", cm}, {"", "ai-sdlc-candidate-0123456789abcdef-zzz999"}, {"", ""}} {
+		if err := worker.RecordToolCallObjects(ctx, a.ID, 1, change[0], change[1]); !errors.Is(err, ErrToolCall) {
+			t.Fatal("recorded name changed", change, err)
+		}
+	}
+	other := validToolRecord()
+	other.PipelineRun = "build-test-x2"
+	if err := worker.FinishToolCall(ctx, a.ID, 1, other); !errors.Is(err, ErrToolCall) {
+		t.Fatal("finish named another run", err)
+	}
+	if _, err := db.Pool.Exec(`UPDATE execution_requests SET claim_until=clock_timestamp()-interval '1 second' WHERE id=$1`, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ExpireExecutionClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var state, run, configMap string
+	if err := db.Pool.QueryRow(`SELECT state,pipeline_run,config_map FROM tool_calls WHERE allocation_id=$1 AND sequence=1`, a.ID).Scan(&state, &run, &configMap); err != nil ||
+		state != "abandoned" || run != "build-test-x1" || configMap != cm {
+		t.Fatal("abandoned call lost its object names", state, run, configMap, err)
 	}
 }
 

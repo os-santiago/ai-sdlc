@@ -39,6 +39,12 @@ var (
 	packageRe   = regexp.MustCompile(packageName)
 )
 
+// Offered reports whether a catalog pipeline is offered as a generator tool.
+// Only maven-build-test, which runs offline under the sandbox: npm-lock-update
+// would resolve URL specs and lockfile hosts from the candidate under the
+// fetch egress (slice 3 brings it back behind proxy-only egress).
+func Offered(kind string) bool { return kind == "maven-build-test" }
+
 // MaxTools and MaxTargets bound a Spec.
 const (
 	MaxTools   = 4
@@ -52,7 +58,7 @@ func (s Spec) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, t := range s.Tools {
-		if !toolName.MatchString(t.Name) || seen[t.Name] || (t.Kind != "maven-build-test" && t.Kind != "npm-lock-update") ||
+		if !toolName.MatchString(t.Name) || seen[t.Name] || !Offered(t.Kind) ||
 			len(t.Targets) == 0 || len(t.Targets) > MaxTargets {
 			return errors.New("invalid generator tool")
 		}
@@ -97,6 +103,10 @@ type rpcRequest struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
+
+// MaxRequestBytes is the mailbox tool route's request bound
+// (modelmailbox.MaxToolRequestBytes).
+const MaxRequestBytes = 800 * 1024
 
 // MaxMessageBytes bounds one JSON-RPC line from SCC.
 const MaxMessageBytes = 64 * 1024
@@ -207,6 +217,11 @@ func call(ctx context.Context, spec Spec, candidate Candidate, relay Relay, requ
 		payload["packages"] = params.Arguments.Packages
 	}
 	body, _ := json.Marshal(payload)
+	if len(body) > MaxRequestBytes {
+		// The diff bound is on its bytes; JSON escaping can push the
+		// request past the mailbox's own bound.
+		return toolText(request.ID, fmt.Sprintf("the candidate change is too large to send: %d bytes encoded, at most %d", len(body), MaxRequestBytes), true)
+	}
 	status, answer, err := relay(ctx, body)
 	if err != nil {
 		return toolText(request.ID, "tool run unavailable", true)

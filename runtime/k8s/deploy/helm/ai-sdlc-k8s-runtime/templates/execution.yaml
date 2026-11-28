@@ -69,8 +69,9 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: execution-contr
        execution controller runs the reviewed catalog pipelines in the Tekton
        CI namespace that ./install.sh local --tekton-ci creates. It creates and
        reads PipelineRuns and cancels them (patch spec.status), and creates
-       the candidate ConfigMaps, makes the run own them (patch) and deletes
-       an unowned one. Admission there still decides which runs are allowed. */}}
+       the candidate ConfigMaps, makes the run own them (patch), and lists
+       and deletes unowned ones. Admission there decides which runs and which
+       ConfigMaps (only immutable candidates) are allowed. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: ai-sdlc-generator-tools, namespace: ai-sdlc-ci}
@@ -80,7 +81,7 @@ rules:
     verbs: [create, get, patch]
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [create, patch, delete]
+    verbs: [create, patch, delete, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

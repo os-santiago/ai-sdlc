@@ -10,6 +10,7 @@ CREATE TABLE tool_calls (
     request_sha256 text NOT NULL CHECK (request_sha256 ~ '^[a-f0-9]{64}$'),
     state text NOT NULL DEFAULT 'started' CHECK (state IN ('started','passed','failed','error','abandoned')),
     pipeline_run text NOT NULL DEFAULT '' CHECK (pipeline_run = '' OR pipeline_run ~ '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'),
+    config_map text NOT NULL DEFAULT '' CHECK (config_map = '' OR config_map ~ '^ai-sdlc-candidate-[0-9a-f]{16}-[0-9a-z]{6}$'),
     revision text NOT NULL DEFAULT '' CHECK (revision = '' OR revision ~ '^[a-f0-9]{40}$'),
     tree text NOT NULL DEFAULT '' CHECK (tree = '' OR tree ~ '^[a-f0-9]{40}$'),
     summary_sha256 text NOT NULL DEFAULT '' CHECK (summary_sha256 = '' OR summary_sha256 ~ '^[a-f0-9]{64}$'),
@@ -19,8 +20,9 @@ CREATE TABLE tool_calls (
     -- Only a started call is unfinished.
     CHECK ((state = 'started') = (finished_at IS NULL)),
     -- A started call (not run yet, or run outcome unknown) and an abandoned
-    -- call (recovery found it started) carry no run identity.
-    CHECK (state NOT IN ('started','abandoned') OR (pipeline_run = '' AND revision = '' AND tree = '' AND summary_sha256 = '')),
+    -- call (recovery found it started) carry at most the object names, never
+    -- an outcome.
+    CHECK (state NOT IN ('started','abandoned') OR (revision = '' AND tree = '' AND summary_sha256 = '')),
     -- A decided run names its PipelineRun, base revision and summary digest.
     -- The tree exists only when a candidate diff was applied. An error may
     -- have happened before or after the PipelineRun existed.

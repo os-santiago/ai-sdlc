@@ -21,7 +21,7 @@ var executionPrivileges = []string{
 	// finish (and recovery) record the outcome. Keys and digests are immutable.
 	`GRANT SELECT ON tool_calls TO aisdlc_worker`,
 	`GRANT INSERT(allocation_id,sequence,request_sha256) ON tool_calls TO aisdlc_worker`,
-	`GRANT UPDATE(state,pipeline_run,revision,tree,summary_sha256,finished_at) ON tool_calls TO aisdlc_worker`,
+	`GRANT UPDATE(state,pipeline_run,config_map,revision,tree,summary_sha256,finished_at) ON tool_calls TO aisdlc_worker`,
 	`GRANT SELECT(id,repository,correlation_id) ON plans TO aisdlc_worker`,
 	`GRANT SELECT(uuid,plan_id,status,issue_numbers,acceptance_criteria,depends_on) ON work_items TO aisdlc_worker`,
 	`GRANT SELECT(repository,issue_number,generation,content_key) ON intake_heads TO aisdlc_worker`,
