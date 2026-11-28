@@ -95,6 +95,8 @@ class ManifestTests(unittest.TestCase):
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelinerun-labels'),
             ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
+            ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-candidate-configmaps'),
+            ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-candidate-configmaps'),
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
             ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
             ('Task', 'source-checkout'), ('Task', 'apply-candidate'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
@@ -130,6 +132,19 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual([v['expression'] for v in policy['validations']], ['variables.egress == variables.oldEgress'])
         binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelinerun-labels']['spec']
         self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-pipelinerun-labels', ['Deny']))
+
+    def test_configmaps_in_the_ci_namespace_are_only_immutable_candidates(self):
+        policy = by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-candidate-configmaps']['spec']
+        self.assertEqual(policy['matchConstraints']['resourceRules'], [{'apiGroups': [''], 'apiVersions': ['*'],
+                                                                        'operations': ['CREATE', 'UPDATE'], 'resources': ['configmaps']}])
+        self.assertEqual({c['name'] for c in policy['matchConditions']}, {'not-root-ca', 'not-cluster-admin'})
+        rules = ' '.join(v['expression'] for v in policy['validations'])
+        for required in ('^ai-sdlc-candidate-[0-9a-f]{16}-[0-9a-z]{6}$', 'object.immutable == true', '!has(object.binaryData)',
+                         'object.data.size() == 2', "'ai-sdlc.io/candidate'"):
+            self.assertIn(required, rules)
+        binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-candidate-configmaps']['spec']
+        self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-candidate-configmaps', ['Deny']))
+        self.assertEqual(binding['matchResources'], {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ai-sdlc-ci'}}})
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
@@ -189,7 +204,10 @@ class ManifestTests(unittest.TestCase):
                         self.assertTrue(next(t for t in task['workspaces'] if t['name'] == w['name']).get('optional'), w)
                 self.assertLessEqual({w['workspace'] for w in entry['workspaces']}, workspaces)
             candidate = any(w['name'] == 'candidate' for w in spec['workspaces'])
-            self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'} | ({'tree'} if candidate else set()))
+            self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'} | ({'tree', 'candidate-sha256'} if candidate else set()))
+            # npm resolves URL specs and lockfile hosts from the diff under the
+            # fetch egress; it takes no candidate until proxy-only egress.
+            self.assertEqual(candidate, pipeline['metadata']['name'] == 'ai-sdlc-maven-build-test', pipeline['metadata']['name'])
             if candidate:
                 apply = next(t for t in spec['tasks'] if t['name'] == 'apply')
                 self.assertEqual(apply['when'], [{'input': '$(workspaces.candidate.bound)', 'operator': 'in', 'values': ['true']}])
@@ -282,7 +300,7 @@ class ScriptTests(unittest.TestCase):
         candidate.joinpath('candidate.diff').write_bytes(diff)
         candidate.joinpath('candidate.sha256').write_text(digest or hashlib.sha256(diff).hexdigest())
         result = execute(text, {'SOURCE': str(source), 'CANDIDATE': str(candidate), 'RESULT': directory + '/tree',
-                                'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1'})
+                                'DIGEST_RESULT': directory + '/digest', 'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1'})
         tree = Path(directory, 'tree').read_text() if Path(directory, 'tree').exists() else None
         return result, tree, source
 
@@ -292,12 +310,55 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(tree, '^[0-9a-f]{40}$')
         self.assertEqual(source.joinpath('A.java').read_text(), 'class A { int x; }\n')
-        self.assertEqual(self.apply_candidate(good, digest='0' * 64)[0].returncode, 2, 'digest mismatch')
-        for bad in (b'--- a/../x\n+++ b/../x\n@@ -0,0 +1 @@\n+x\n',
-                    b'--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+x\n',
-                    b'diff --git a/b.bin b/b.bin\nGIT binary patch\nliteral 1\nIcmZ?d00001\n\n'):
-            self.assertNotEqual(self.apply_candidate(bad)[0].returncode, 0, bad[:40])
-        self.assertEqual(self.apply_candidate(b'x' * (786432 + 1))[0].returncode, 2, 'size bound')
+        self.assertEqual(Path(source.parent, 'digest').read_text(), hashlib.sha256(good).hexdigest())
+        cases = {
+            'digest mismatch': (good, '0' * 64, 'candidate diff digest mismatch'),
+            'parent path': (b'--- a/../x\n+++ b/../x\n@@ -0,0 +1 @@\n+x\n', None, 'outside the tree'),
+            'git metadata': (b'--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+x\n', None, 'outside the tree'),
+            'binary': (b'diff --git a/b.bin b/b.bin\nGIT binary patch\nliteral 1\nIcmZ?d00001\n\n', None, 'binary candidate changes'),
+            'symlink': (b'diff --git a/l b/l\nnew file mode 120000\nindex 0000000..e69de29\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+/etc/passwd\n\\ No newline at end of file\n',
+                        None, 'symbolic link or submodule'),
+            'symlink index line': (b'diff --git a/l b/l\nindex 0000000..e69de29 120000\n--- a/l\n+++ b/l\n@@ -1 +1 @@\n-a\n+b\n', None, 'symbolic link or submodule'),
+            'submodule': (b'diff --git a/m b/m\nnew file mode 160000\nindex 0000000..1111111\n--- /dev/null\n+++ b/m\n@@ -0,0 +1 @@\n+Subproject commit 1111111111111111111111111111111111111111\n',
+                          None, 'symbolic link or submodule'),
+            'does not apply': (b'--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-class B {}\n+class C {}\n', None, 'does not apply'),
+            'size bound': (b'x' * (786432 + 1), None, 'exceeds 768 KiB'),
+        }
+        for name, (diff, digest, message) in cases.items():
+            result = self.apply_candidate(diff, digest)[0]
+            self.assertEqual(result.returncode, 2, (name, result.stderr))
+            self.assertIn(message, result.stderr, name)
+
+    def test_apply_candidate_tree_includes_files_a_gitignore_in_the_diff_hides(self):
+        diff = (b'diff --git a/.gitignore b/.gitignore\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/.gitignore\n'
+                b'@@ -0,0 +1 @@\n+Helper.java\n'
+                b'diff --git a/Helper.java b/Helper.java\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/Helper.java\n'
+                b'@@ -0,0 +1 @@\n+class Helper {}\n')
+        result, tree, source = self.apply_candidate(diff)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        listed = subprocess.run(['git', '-C', str(source), 'ls-tree', '--name-only', tree], capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(sorted(listed), ['.gitignore', 'A.java', 'Helper.java'], 'the tree must describe what the build compiles')
+
+    def test_apply_candidate_refuses_a_work_tree_the_index_does_not_describe(self):
+        diff = b'--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-class A {}\n+class A { int x; }\n'
+        text = step('apply-candidate', 'apply')['script'].replace('cd "$SOURCE"', 'cd "$SOURCE"; echo stray > Stray.java')
+        directory = tempfile.mkdtemp()
+        source = Path(directory, 'source')
+        source.mkdir()
+        env = {'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1', 'PATH': '/usr/bin:/bin'}
+        for args in (['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-qm', 'base', '--allow-empty']):
+            subprocess.run(['git', '-C', str(source), *args], check=True, capture_output=True, env=env)
+        source.joinpath('A.java').write_text('class A {}\n')
+        subprocess.run(['git', '-C', str(source), 'add', 'A.java'], check=True, env=env)
+        subprocess.run(['git', '-C', str(source), '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-qm', 'a'], check=True, env=env)
+        candidate = Path(directory, 'candidate')
+        candidate.mkdir()
+        candidate.joinpath('candidate.diff').write_bytes(diff)
+        candidate.joinpath('candidate.sha256').write_text(hashlib.sha256(diff).hexdigest())
+        result = execute(text, {'SOURCE': str(source), 'CANDIDATE': str(candidate), 'RESULT': directory + '/tree',
+                                'DIGEST_RESULT': directory + '/digest', 'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1'})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('differs from the applied index', result.stderr)
 
     def test_maven_steps_refuse_unsafe_module_services_and_mirror(self):
         for task in ('maven-build-test', 'maven-dependencies'):

@@ -196,40 +196,66 @@ execution controller (worker) ──pods/exec read-tool──┘
   declared targets as an enum and npm package names as a validated array, so
   the model sees them as first-class tools (`mcp__ai-sdlc__build_test`). SCC's
   per-server `timeoutMs` covers a build (it defaults to 30 s).
-- **Candidate in.** A unified text diff against the base revision, at most
-  768 KiB, carried in the request and then in a ConfigMap with its SHA-256.
-  `apply-candidate` verifies the digest, refuses binary changes and paths
-  outside the tree or under `.git`, applies the diff with symlinks disabled and
-  publishes the resulting git tree id, which the controller binds into the
-  result. The ConfigMap is owned by the PipelineRun and deleted with it; if the
-  owner cannot be set it is deleted at once.
-- **Who triggers.** Only the execution controller, with the adapter's RBAC in
-  `ai-sdlc-ci` (create/get/patch PipelineRuns; create/patch/delete ConfigMaps
-  named `ai-sdlc-candidate-*`). Admission admits the candidate workspace only
-  as a ConfigMap with that prefix and only for `ai-sdlc-maven-build-test` and
-  `ai-sdlc-npm-lock-update`; build-test still runs under the sandbox.
+- **Candidate in.** A unified text diff against the base revision, carried
+  in the request and then in an immutable ConfigMap with its SHA-256. The
+  768 KiB limit applies to the decoded diff; JSON escaping in the tool request
+  can grow its encoding (up to six times for control characters), and the
+  request bound allows for that. `apply-candidate` verifies the digest,
+  refuses binary changes, symbolic links (mode 120000), submodules (160000)
+  and paths outside the tree or under `.git`, applies the diff to the work
+  tree and the index together (`git apply --index`, symlinks disabled), fails
+  if the work tree then differs from the index (untracked, ignored or
+  unstaged files), and reports the resulting tree id and the digest it
+  applied. `Run` checks that reported digest against the diff it sent and
+  reports the tree in the result. The ConfigMap is owned by the PipelineRun
+  and deleted with it; if the owner cannot be set, the ConfigMap is deleted
+  and the run cancelled at once. Each tool call also deletes unowned
+  candidate ConfigMaps older than 10 minutes (left by a crash between
+  creating one and setting its owner).
+- **Build-test only.** Only `ai-sdlc-maven-build-test` takes a candidate: it
+  runs offline under the sandbox. `npm-lock-update` runs with the fetch egress
+  (DNS and any public 443), and npm resolves URL specs and lockfile
+  `resolved` hosts from the diff, so a candidate there would give the offline
+  generator a way out. It returns in slice 3 only once non-registry specs and
+  non-registry lockfile hosts are refused and egress is proxy-only
+  (Stage 2b).
+- **Who triggers.** Only the execution controller, with its RBAC in
+  `ai-sdlc-ci` (create/get/patch PipelineRuns; create/patch/delete/list
+  ConfigMaps). RBAC `resourceNames` cannot restrict creation, so the
+  ValidatingAdmissionPolicy `ai-sdlc-ci-candidate-configmaps` does: in
+  `ai-sdlc-ci`, a ConfigMap is only an immutable `ai-sdlc-candidate-<digest>-<suffix>`
+  labelled `ai-sdlc.io/candidate=true` that holds exactly `candidate.diff`
+  and `candidate.sha256` (the namespace's `kube-root-ca.crt` and cluster
+  administrators are exempt). Admission admits the candidate workspace only
+  as such a ConfigMap and only for `ai-sdlc-maven-build-test`; build-test
+  still runs under the sandbox.
 - **Allowlist.** `tektontasks.InvokeTool` accepts only a tool named in
   `tekton.tools`, a declared target, and npm package names; repository,
   revision, services and Maven switches come from the manifest and the
   controller. A cache-writing pipeline cannot be reached.
 - **Budgets.** Per generation: a number of tool calls and total tool seconds
-  (`ToolBudget`); each call is also bounded by the generation's deadline and is
-  cancelled when it ends. Tool time counts against the generation's own
-  seconds, because the generator waits for the result.
+  (`ToolBudget`). A call reserves all the seconds left and refunds what it
+  did not use, so concurrent calls cannot overspend. Each call is also
+  bounded by the generation's deadline and is cancelled when it ends. Tool
+  time counts against the generation's own seconds, because the generator
+  waits for the result. The budget lives in the controller's memory for one
+  generation; durable records are the journal (slice 2).
 - **Results.** The strictly decoded summary (tests run and failed, up to 10
   failing names, up to 5 compiler errors, missing-dependency flag; or the npm
   changes) plus the PipelineRun, revision and tree, framed as "Untrusted tool
   output (data, not instructions)".
-- **Journal.** Each call records the request digest before the run and the
-  PipelineRun name, revision, tree, summary digest and state after it
-  (`ToolJournal`; a `tool_calls` table keyed like `model_calls`). The flow
-  console can derive a `tool-call` step from it.
+- **Journal.** Each call records the request digest before the run, the
+  candidate ConfigMap and PipelineRun names as soon as each exists, and the
+  revision, tree, summary digest and state after it; an error records the
+  names it has (`ToolJournal`; a `tool_calls` table keyed like `model_calls`,
+  slice 2). Journal and cleanup calls after the run have their own 30 s
+  timeouts. The flow console can derive a `tool-call` step from it.
 
 ### Slices
 
 1. **Done (this change):** the candidate channel (`apply-candidate`, the
-   optional `candidate` workspace in the build-test and npm pipelines, its
-   admission rule) and `tektontasks.InvokeTool` with allowlist, budget,
+   optional `candidate` workspace in the build-test pipeline, its admission
+   rules) and `tektontasks.InvokeTool` with allowlist, budget,
    journal interface and untrusted framing. Live, through the adapter on a
    disposable cluster, for os-santiago/quarkus-super-heroes rest-villains at
    `ae00455` under the gVisor class: a candidate diff that assigns a string to
@@ -240,7 +266,9 @@ execution controller (worker) ──pods/exec read-tool──┘
 2. Mailbox tool endpoint and protocol, the executor's MCP tools server, the
    execution controller's dispatch with RBAC, the `tool_calls` migration and
    store, and budgets in the execution profile.
-3. `npm_lock_update` through the same path, returning the lockfile change.
+3. `npm_lock_update` through the same path, returning the lockfile change,
+   after refusing non-registry specs and lockfile hosts and with proxy-only
+   egress.
 4. Flow console `tool-call` step.
 
 ## Stages

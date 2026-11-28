@@ -77,8 +77,16 @@ type Request struct {
 // and apply-candidate refuses more than 768 KiB.
 const MaxCandidateBytes = 768 * 1024
 
-// candidatePipelines accept a candidate diff.
-var candidatePipelines = map[string]bool{project.TektonMavenBuildTest: true, project.TektonNpmLockUpdate: true}
+// candidatePipelines accept a candidate diff. Only build-test, which runs
+// offline under the sandbox: npm-lock-update runs with the fetch egress (DNS
+// and public 443) and npm resolves URL specs and lockfile hosts, so a
+// generator's diff could reach the network through it. It returns once
+// non-registry specs and hosts are refused and egress is proxy-only.
+var candidatePipelines = map[string]bool{project.TektonMavenBuildTest: true}
+
+// refusedCandidate matches what apply-candidate refuses before applying:
+// binary patches, symbolic links (120000) and submodules (160000).
+var refusedCandidate = regexp.MustCompile(`(?m)^(GIT binary patch|Binary files |((old|new|new file|deleted file) mode|index [0-9a-f]+\.\.[0-9a-f]+) (120000|160000)$)`)
 var configMapName = regexp.MustCompile(`^ai-sdlc-candidate-[0-9a-f]{16}-[0-9a-z]{6}$`)
 
 // FromInvocation builds a pre- or post-generation request from the manifest.
@@ -149,7 +157,7 @@ func (r Request) Validate() error {
 		return ErrRequest
 	}
 	if len(r.Candidate) > 0 && (!candidatePipelines[r.Pipeline] || len(r.Candidate) > MaxCandidateBytes ||
-		!configMapName.MatchString(r.CandidateConfigMap)) {
+		!configMapName.MatchString(r.CandidateConfigMap) || refusedCandidate.Match(r.Candidate)) {
 		return ErrRequest
 	}
 	switch project.TektonTargetKind(r.Pipeline) {
