@@ -169,8 +169,8 @@ class ResourceTests(unittest.TestCase):
         self.assertNotIn('default-pod-template', next(i for i in items if i['metadata']['name'] == 'config-defaults')['data'])
         with self.assertRaisesRegex(ValueError, 'config-defaults'):
             tekton.desired_tekton(release_items(), lock, CONFIG, UID, template)
-        self.assertEqual(tekton.pod_quotas(workers=3), {'candidate': 3, 'fetch': 3})
-        self.assertEqual(tekton.pod_quotas(2, None, 3), {'candidate': 2, 'fetch': 3})
+        self.assertEqual(tekton.pod_quotas(workers=3), {'candidate': 1, 'fetch': 1}, 'CI runs on one node')
+        self.assertEqual(tekton.pod_quotas(2, None, 3), {'candidate': 2, 'fetch': 1})
 
     def test_desired_tekton_refuses_drift_from_the_lock(self):
         _, lock = synthetic('')

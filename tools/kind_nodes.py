@@ -122,11 +122,14 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0):
     caps it, so the budget holds even when every pod reaches its bound and
     relies on no measurement of what a pod usually uses.
 
-    With workers, sandboxed and CI pods run only on the workers, and each
-    worker's kubelet maxPods (max_pods) caps it at what its pid limit holds,
-    every pod counted at its podPidsLimit. The quotas then only need to fit
-    the workers' combined capacity, so they scale with the worker count; the
-    control-plane keeps its own baseline.
+    With workers, every Tekton CI pod runs on one CI worker: a run's source
+    claim and the Maven caches are node-local (ReadWriteOnce), so they must
+    share a node, and the sealed dependency caches the Tekton fill writes
+    keep each verification run there too. Its kubelet maxPods (max_pods)
+    caps it at what its pid limit holds, every pod counted at its
+    podPidsLimit, and one verification run plus the CI quotas must fit that
+    one worker. Other workers run the remaining sandboxed pods (executors,
+    reviewers); the control-plane keeps its own baseline.
     """
     budget = policy()['pidBudget']
     pod = sandbox_pod_pids()
@@ -141,11 +144,11 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0, workers=0):
                   'workerBaseline': budget['workerBaseline'], 'podPidsLimit': pod, 'workers': workers,
                   'workerPodCapacity': capacity, 'workerMaxPods': max_pods(limit), 'sandboxPods': sandbox_pods,
                   'candidatePods': candidate_pods, 'fetchPods': fetch_pods, 'requiredPods': required}
-        if budget['nodeBaseline'] > limit or capacity < 1 or required > workers * capacity:
-            raise ValueError('%d workers with a pid limit of %d hold %d pods (%d each); one verification run and the '
-                             'Tekton CI pod quotas (installed or requested) need %d; raise --node-pids-limit or --workers or '
-                             'lower the quotas, quotas first when lowering both'
-                             % (workers, limit, workers * max(capacity, 0), max(capacity, 0), required))
+        if budget['nodeBaseline'] > limit or capacity < 1 or required > capacity:
+            raise ValueError('The CI worker with a pid limit of %d holds %d pods; one verification run and the Tekton CI '
+                             'pod quotas (installed or requested) need %d, all on that worker because their volumes '
+                             'are node-local; raise --node-pids-limit or lower the quotas, quotas first when lowering '
+                             'both' % (limit, max(capacity, 0), required))
         return report
     required = budget['nodeBaseline'] + (sandbox_pods + candidate_pods + fetch_pods) * pod
     report = {'nodePidsLimit': limit, 'nodeBaseline': budget['nodeBaseline'], 'podPidsLimit': pod,
@@ -199,6 +202,16 @@ def effective_limit(run, provider, cluster, kind, env, want, names=None):
     if not names:
         raise ValueError('The kind cluster has no nodes')
     return min(target_limit(inspect(run, provider, name)['pidsLimit'], want) for name in names)
+
+
+def lowers_limit(run, provider, names, want):
+    """Whether reconciling would lower any node's pid limit (an unlimited
+    node counts as lowered)."""
+    for name in names:
+        current = inspect(run, provider, name)['pidsLimit']
+        if current is None or target_limit(current, want) < current:
+            return True
+    return False
 
 
 def apply(run, provider, cluster, node, want):
@@ -291,6 +304,8 @@ def apply_cluster(run, provider, cluster, kind, env, want, nodes=None, cgroup_ro
 ROLE_LABEL = 'ai-sdlc.io/node-role'
 ROLE_SANDBOX = 'sandbox'
 READY_LABEL = 'ai-sdlc.io/offline-runtime'
+CI_LABEL = 'ai-sdlc.io/ci-node'
+CI = 'true'
 READY = 'ready'
 SANDBOX_TAINT = {'key': 'ai-sdlc.io/sandbox', 'value': 'true', 'effect': 'NoSchedule'}
 CONTROL_PLANE_TAINT = 'node-role.kubernetes.io/control-plane'
@@ -307,7 +322,8 @@ def validate_workers(workers):
 def cluster_config(workers):
     """The kind cluster configuration: the committed kind.yaml, plus one
     worker per requested node with the same pinned image, the sandbox role
-    label and the sandbox taint. Zero workers is kind.yaml unchanged."""
+    label and the sandbox taint; the first worker is also the CI worker.
+    Zero workers is kind.yaml unchanged."""
     base = (LOCAL / 'kind.yaml').read_text()
     if not workers:
         return base
@@ -318,6 +334,7 @@ def cluster_config(workers):
               '    image: %s\n'
               '    labels:\n'
               '      %s: %s\n'
+              '%s'
               '    kubeadmConfigPatches:\n'
               '      - |\n'
               '        kind: JoinConfiguration\n'
@@ -325,9 +342,11 @@ def cluster_config(workers):
               '          taints:\n'
               '            - key: %s\n'
               '              value: "%s"\n'
-              '              effect: %s\n') % (images[0], ROLE_LABEL, ROLE_SANDBOX, SANDBOX_TAINT['key'],
-                                              SANDBOX_TAINT['value'], SANDBOX_TAINT['effect'])
-    return base.rstrip('\n') + '\n' + worker * workers
+              '              effect: %s\n')
+    blocks = [worker % (images[0], ROLE_LABEL, ROLE_SANDBOX, '      %s: "%s"\n' % (CI_LABEL, CI) if index == 0 else '',
+                        SANDBOX_TAINT['key'], SANDBOX_TAINT['value'], SANDBOX_TAINT['effect'])
+              for index in range(workers)]
+    return base.rstrip('\n') + '\n' + ''.join(blocks)
 
 
 def topology(run, provider, kind, cluster, env):
@@ -358,7 +377,7 @@ def sandbox_nodes(nodes):
     return nodes['workers'] or [nodes['controlPlane']]
 
 
-def schedule(run, kubectl, nodes):
+def schedule(run, kubectl, nodes, ci=None):
     """Keep sandboxed and CI pods on the workers and the runtime off them.
 
     kind keeps the control-plane taint once a cluster has workers; the runtime
@@ -376,8 +395,14 @@ def schedule(run, kubectl, nodes):
                    and t.get('effect') == SANDBOX_TAINT['effect'] for t in node['spec'].get('taints') or []):
             _command(run, kubectl + ['taint', 'node', worker, '--overwrite',
                                      '%s=%s:%s' % (SANDBOX_TAINT['key'], SANDBOX_TAINT['value'], SANDBOX_TAINT['effect'])])
-        if node['metadata'].get('labels', {}).get(ROLE_LABEL) != ROLE_SANDBOX:
+        labels = node['metadata'].get('labels', {})
+        if labels.get(ROLE_LABEL) != ROLE_SANDBOX:
             _command(run, kubectl + ['label', 'node', worker, '--overwrite', ROLE_LABEL + '=' + ROLE_SANDBOX])
+        # Exactly one CI worker: Tekton pods share node-local claims.
+        if worker == (ci or nodes['workers'][0]) and labels.get(CI_LABEL) != CI:
+            _command(run, kubectl + ['label', 'node', worker, '--overwrite', CI_LABEL + '=' + CI])
+        elif worker != (ci or nodes['workers'][0]) and CI_LABEL in labels:
+            _command(run, kubectl + ['label', 'node', worker, CI_LABEL + '-'])
 
 
 def toleration():
@@ -390,24 +415,61 @@ def runtime_class_scheduling():
     return {'nodeSelector': {READY_LABEL: READY}, 'tolerations': [toleration()]}
 
 
+CI_VOLUME_PREFIXES = ('ai-sdlc-ci-maven-cache-', 'deps-')
+
+
+def ci_worker(run, kubectl, nodes):
+    """The worker that runs every Tekton CI pod: the node that already holds
+    the CI namespace's node-local caches (Maven caches, dependency work
+    claims), or the first worker when none is bound yet. Caches on more than
+    one node cannot all be served and are refused."""
+    if not nodes['workers']:
+        return None
+    raw = _command(run, kubectl + ['get', 'pv', '-o', 'json']).stdout
+    hosts = set()
+    for volume in (json.loads(raw) if raw.strip() else {}).get('items', []):
+        claim = volume.get('spec', {}).get('claimRef') or {}
+        if claim.get('namespace') != 'ai-sdlc-ci' or not str(claim.get('name', '')).startswith(CI_VOLUME_PREFIXES):
+            continue
+        terms = (((volume['spec'].get('nodeAffinity') or {}).get('required') or {}).get('nodeSelectorTerms') or [])
+        for term in terms:
+            for expression in term.get('matchExpressions') or []:
+                if expression.get('key') == 'kubernetes.io/hostname':
+                    hosts.update(expression.get('values') or [])
+    if len(hosts) > 1:
+        raise ValueError('Tekton CI caches are bound to several nodes (%s); every CI run needs them on one node'
+                         % ', '.join(sorted(hosts)))
+    if hosts and next(iter(hosts)) not in nodes['workers']:
+        raise ValueError('Tekton CI caches are bound to %s, which is not a worker' % next(iter(hosts)))
+    return next(iter(hosts)) if hosts else nodes['workers'][0]
+
+
 def tekton_pod_template():
-    """Tekton's default pod template on a cluster with workers. Every task
-    pod of a run shares the run's node-local source claim, and the Maven cache
-    is node-local too, so fetch pods must run where build-test pods (gVisor,
-    workers only) can follow them."""
-    return {'nodeSelector': {ROLE_LABEL: ROLE_SANDBOX}, 'tolerations': [toleration()]}
+    """Tekton's default pod template on a cluster with workers: every task
+    pod runs on the one CI worker. A run's source claim (bound by its checkout
+    pod) and the repository's Maven cache are both node-local ReadWriteOnce
+    volumes that build-test mounts together; without one shared node they
+    bind on different workers and build-test can never schedule. The CI
+    worker is prepared like every worker, so build-test (gVisor) runs there."""
+    return {'nodeSelector': {CI_LABEL: CI}, 'tolerations': [toleration()]}
 
 
-def node_addresses(run, provider, names):
+def node_addresses(run, provider, names, required=True):
     """The node IPs on kind's network. Pods leave the node through SNAT to
     these addresses, so a host service that allowlists clients (the local
-    model service) must allow each of them."""
+    model service) must allow each of them. The network is the one kind
+    uses (KIND_EXPERIMENTAL_<PROVIDER>_NETWORK, default kind), or a node's
+    only network. A node whose address cannot be read is reported as None
+    unless required (a cluster with workers)."""
+    import os
+    network = os.environ.get('KIND_EXPERIMENTAL_%s_NETWORK' % str(provider).upper(), 'kind')
     result = {}
     for name in names:
         raw = _command(run, [provider, 'inspect', '--format', '{{json .NetworkSettings.Networks}}', name]).stdout
-        networks = json.loads(raw) or {}
-        address = (networks.get('kind') or {}).get('IPAddress')
-        if not address:
+        networks = json.loads(raw or 'null') or {}
+        entry = networks.get(network) or (next(iter(networks.values())) if len(networks) == 1 else {})
+        address = (entry or {}).get('IPAddress')
+        if not address and required:
             raise ValueError('Cannot read the kind network address of ' + name)
-        result[name] = address
+        result[name] = address or None
     return result

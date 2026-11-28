@@ -85,12 +85,13 @@ for 2,048:
   768 = 4,940, so the candidate quota can rise to 5 with one fetch pod. At
   podman's 2,048 the verification profile is refused, which is issue #859.
 
-The installer checks this budget against both the quotas already in the
-cluster and the requested ones, so it holds before, during and after a
-reconciliation, and when a later run omits `--tekton-ci` (which keeps Tekton
-and its quotas). `./install.sh sandbox` counts the verification run too.
-Because the installed quotas count, lowering both the quotas and the limit
-takes two runs: first the quotas, then the limit.
+The installer checks this budget against the smallest limit the nodes will
+have. When a run lowers a node's limit, it counts the larger of the installed
+and the requested quotas, because the installed ones stay until Tekton CI is
+reapplied (and forever if `--tekton-ci` is omitted); lowering both the quotas
+and the limit therefore takes two runs, quotas first. A run that keeps or
+raises the limit counts the requested quotas, or the installed ones when it
+omits `--tekton-ci`. `./install.sh sandbox` counts the verification run too.
 
 No single pod can exceed its `podPidsLimit` and no scope its
 `DefaultTasksMax`, both well below the node limit, so one runaway pod cannot
@@ -127,13 +128,21 @@ three-pod verification with six PostgreSQL sidecars ran on the same node.
   label plus a toleration for the taint. Every sandboxed pod (executors,
   reviewers, verification runs, Tekton build-test) therefore lands only on
   prepared workers, without chart changes.
-- Tekton's default pod template (`config-defaults`) selects the worker role
-  and tolerates the taint. Fetch tasks run on workers too, because a run's
-  source claim and the Maven cache are node-local and the sandboxed build-test
-  must be able to follow them.
+- Tekton's default pod template (`config-defaults`) selects the one **CI
+  worker** (label `ai-sdlc.io/ci-node=true`) and tolerates the taint. A
+  build-test pod mounts both the run's source claim, bound by its checkout
+  pod, and the repository's Maven cache. Both are node-local ReadWriteOnce
+  volumes, so on different workers build-test could never schedule. Every
+  Tekton pod (fetch and the sandboxed build-test) therefore runs on the CI
+  worker, which is prepared like every worker. This covers runs from
+  `tools/tekton_ci_run.py` and runs the runtime creates. The CI worker is the
+  worker that already holds the CI caches, or the first worker when none is
+  bound. Caches bound on several nodes are refused. The CI admission policy
+  admits exactly this nodeSelector and toleration in a run's template.
 - The installer verifies the runtime with the usual conformance probe and also
   runs one sandboxed pod pinned to each worker (`nodeVerification` in the
-  report).
+  report). `local` also runs the network-policy conformance on the workers
+  (`workerNetworkPolicyVerification`).
 
 **Measured isolation.** The test cluster had one control-plane and two
 workers on a 16-CPU host. Three pods, each running four busy threads with
@@ -158,29 +167,31 @@ into a node, so a new worker needs no extra step.
 **Node-local volumes.** local-path volumes are ReadWriteOnce and bound to the
 node where their first pod ran, through the PersistentVolume's node affinity.
 
-- The Tekton Maven cache and each run's source claim bind to a worker, and
-  every later pod that mounts them is scheduled there.
-- The sealed dependency cache `deps-<key>` keeps the node of its Tekton fill.
-  The three concurrent runs of a verification (baseline, cross, candidate)
-  share that claim, so all three run on that worker.
+- The Tekton Maven caches and each run's source claim bind to the CI worker,
+  and every later pod that mounts them is scheduled there.
+- The sealed dependency cache `deps-<key>` keeps the node of its Tekton fill,
+  the CI worker. The three concurrent runs of a verification (baseline, cross,
+  candidate) share that claim, so all three run on the CI worker too.
 - `tools/dependency_cache_install.py seal` refuses a volume bound to a node the
   RuntimeClass cannot schedule onto.
 - Use ReadWriteMany storage if runs must spread across workers.
 
-**Pid budget and quotas.** With the offline runtime, each worker's kubelet `maxPods` is set to what its
-pid limit holds: `(limit - 400) // 768 - 1` pods at the 768 `podPidsLimit`,
-plus kindnet, kube-proxy and one slot for short helper pods. At 8,192 that is
-9 pods and `maxPods: 12`. The scheduler enforces it. Even pods that a
-node-local volume draws to one worker can never exceed that worker's pid
+**Pid budget and quotas.** On every `local` and `sandbox` run, each worker's
+kubelet `maxPods` is set to what its pid limit holds: `(limit - 400) // 768 -
+1` pods at the 768 `podPidsLimit`, plus kindnet, kube-proxy and one slot for
+short helper pods. At 8,192 that is 9 pods and `maxPods: 12`. It follows the
+limit when the limit changes, and the scheduler enforces it, so even pods that
+node-local volumes draw to one worker can never exceed that worker's pid
 limit; extra pods wait.
 
-The quotas then only need to fit the workers' combined capacity, so they scale
-with the worker count:
-
-- The Tekton CI candidate and fetch quotas default to one of each per worker.
-- The installer refuses quotas that exceed `workers x capacity` once one
-  verification run (3 pods) is reserved.
-- The control-plane keeps its own baseline and runs no sandboxed pod.
+The CI pods and the verification runs that use the sealed caches all land on
+the CI worker, so one verification run (3 pods) plus the Tekton CI candidate
+and fetch quotas must fit that one worker's capacity. The quotas keep their
+defaults of one each and do not grow with the worker count; raise the CI
+worker's capacity with `--node-pids-limit` (9 pods at 8,192, 20 at 16,384).
+More workers add room for the other sandboxed pods (executors and reviewers),
+separate pid and cgroup limits, and isolation of the control-plane, which
+keeps its own baseline and runs no sandboxed pod.
 
 **Host services.** Pods reach the host through SNAT to their node's address,
 so a host service that allowlists client addresses (the local model service's

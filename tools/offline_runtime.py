@@ -468,3 +468,34 @@ def install_node(kubectl, provider, plan, lock, fragment, shim, command, root, w
     tasks_max = sandbox_task_limit(read, write, command, node_exec)
     return {'scopeTasksMax': tasks_max, 'podPidsLimit': applied['podPidsLimit'], 'nodePidsLimit': limit,
             **({'maxPods': applied['maxPods']} if worker else {})}
+
+
+def reconcile_max_pods(kubectl, provider, cluster, node, limit):
+    """Set a worker's kubelet maxPods from its pid limit on every install, so
+    the scheduler's per-node pod cap follows the limit even before (or
+    without) ./install.sh sandbox, and after the limit changes."""
+    import kind_nodes
+
+    def command(args, **kwargs):
+        return subprocess.run([str(v) for v in args], text=True, check=True,
+                              capture_output=True, timeout=90, **kwargs).stdout
+    label = command([provider, 'inspect', '--format', '{{index .Config.Labels "io.x-k8s.kind.cluster"}}', node]).strip()
+    if label != cluster:
+        raise ValueError('Kind node container ownership mismatch')
+    node_exec = [provider, 'exec', node]
+
+    def read(path):
+        exists = subprocess.run(node_exec + ['test', '-e', path], timeout=15)
+        if exists.returncode == 1:
+            return None
+        if exists.returncode:
+            raise ValueError('Cannot inspect kind node filesystem')
+        return command(node_exec + ['cat', path])
+
+    def write(path, value):
+        command([provider, 'exec', '-i', node, 'tee', path], input=value)
+    desired = kind_nodes.max_pods(limit)
+    kubelet_settings(read, write, command, node_exec, lambda: kubelet_config(kubectl, node, command),
+                     {'maxPods': desired})
+    command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
+    return desired

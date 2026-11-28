@@ -46,7 +46,9 @@ def policy(namespace, name, selector, direction, rules):
                      'policyTypes': [direction], direction.lower(): rules}}
 
 
-def verify(kubectl, image, runner=None):
+def verify(kubectl, image, runner=None, placement=None):
+    """placement (nodeSelector and tolerations) runs the probe pods on
+    chosen nodes, for example the workers of a multi-node kind cluster."""
     runner = runner or subprocess.run
     namespace = 'ai-sdlc-netcheck-' + secrets.token_hex(6)
     uid = None
@@ -89,7 +91,10 @@ def verify(kubectl, image, runner=None):
                        'pod-security.kubernetes.io/enforce': 'restricted'}}}))
         uid = created['metadata']['uid']
         for name in ('server-a', 'server-b', 'client'):
-            apply(pod(namespace, name, image))
+            value = pod(namespace, name, image)
+            if placement:
+                value['spec'].update(placement)
+            apply(value)
         call(['-n', namespace, 'wait', '--for=condition=Ready', 'pods', '--all', '--timeout=90s'])
         servers = [call(['-n', namespace, 'get', 'pod', name, '-o', 'jsonpath={.status.podIP}']).strip()
                    for name in ('server-a', 'server-b')]

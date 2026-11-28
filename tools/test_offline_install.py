@@ -327,6 +327,20 @@ class SandboxTaskLimitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different maxPods'):
             runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'], lambda: {}, {'podPidsLimit': 768, 'maxPods': 12})
 
+    def test_install_node_sets_max_pods_only_on_workers(self):
+        captured = []
+        plan = {'node': 'c-worker', 'exec': ['podman', 'exec', 'c-worker'],
+                'read': {'/sys/fs/cgroup/pids.max': '8192\n'}.get, 'write': lambda *a: None,
+                'marker': 'm', 'existingShim': 'shim', 'before': 'cfg', 'desired': 'cfg'}
+        lock = {'files': {}}
+        with patch.object(runtime, 'kubelet_settings', side_effect=lambda *a, **k: captured.append(a[5]) or dict(a[5])), \
+             patch.object(runtime, 'sandbox_task_limit', return_value=3072):
+            worker = runtime.install_node(['kubectl'], 'podman', plan, lock, 'f', 'shim', lambda *a, **k: '', None, worker=True)
+            single = runtime.install_node(['kubectl'], 'podman', dict(plan, node='c-control-plane'), lock, 'f', 'shim',
+                                          lambda *a, **k: '', None, worker=False)
+        self.assertEqual(captured, [{'podPidsLimit': 768, 'maxPods': 12}, {'podPidsLimit': 768}])
+        self.assertEqual((worker['maxPods'], 'maxPods' in single), (12, False))
+
     def test_runtime_class_schedules_only_with_workers(self):
         single = runtime.runtime_class('uid', [])
         self.assertNotIn('scheduling', single)

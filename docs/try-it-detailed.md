@@ -58,8 +58,9 @@ Reference measurements on the sample repositories are in
   limit that cannot hold one verification run and the Tekton CI quotas; see
   [kind node resources](operations/kind-node-resources.md).
 - **Worker nodes.** `--workers N` (0 to 4, default 0) creates a kind cluster
-  whose sandboxed and CI pods run only on the workers, so verification load
-  does not starve the control-plane, the runtime database or the API server.
+  whose sandboxed and CI pods run only on the workers (Tekton CI and the
+  verification runs on one CI worker), so verification load does not starve
+  the control-plane, the runtime database or the API server.
   It applies when the cluster is created. The installer prints every node IP;
   a host model service that allowlists clients must allow each one.
 - **One repository per cluster.** The installer refuses to change the

@@ -969,6 +969,18 @@ class RunToolTests(unittest.TestCase):
                 runner.sandbox_ready('c', 768, run=old, kubectl=['kubectl'])
                 self.assertEqual(old.call_args.args[0][:3], ['podman', 'exec', 'c-control-plane'])
 
+    def test_admission_admits_only_the_exact_ci_worker_placement(self):
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}", rules)
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', "
+                      "'value': 'true', 'effect': 'NoSchedule'}]", rules)
+        import kind_nodes
+        self.assertEqual(kind_nodes.tekton_pod_template(), {'nodeSelector': {'ai-sdlc.io/ci-node': 'true'}, 'tolerations': [
+            {'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true', 'effect': 'NoSchedule'}]},
+            'the installer template and the admitted values must stay identical')
+        # Per-task overrides still allow no placement fields.
+        self.assertIn("s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName'])", rules)
+
     def test_admission_requires_the_sandbox_for_build_test(self):
         rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
         self.assertIn("s.pipelineTaskName == 'build-test'", rules)

@@ -209,10 +209,10 @@ CephFS, a cloud file service).
 
 On a local kind cluster created with `--workers` (see
 [kind node resources](kind-node-resources.md#worker-nodes)), local-path
-volumes stay ReadWriteOnce and node-bound. The Tekton fill runs on a worker
-(Tekton's default pod template), local-path gives the volume a node affinity
-for that worker, and the sealed claim keeps it. Every verification run that
-mounts the cache is therefore scheduled onto that one worker: the three
+volumes stay ReadWriteOnce and node-bound. The Tekton fill runs on the CI
+worker (Tekton's default pod template), local-path gives the volume a node
+affinity for that worker, and the sealed claim keeps it. Every verification
+run that mounts the cache is therefore scheduled onto that one worker: the three
 concurrent runs of a verification (baseline, cross, candidate) share it, and
 the worker's kubelet `maxPods` keeps them within its pid limit; extra pods wait
 until one ends. `seal` refuses a volume bound to a node that the

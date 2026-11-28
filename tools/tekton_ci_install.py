@@ -254,11 +254,11 @@ def desired_ci(items, cluster_uid):
 
 
 def pod_quotas(candidate=None, fetch=None, workers=0):
-    """The reviewed pod quotas: one candidate and one fetch pod per sandbox
-    node (the single node, or each worker) unless set explicitly."""
-    nodes = max(1, workers)
-    quotas = {'candidate': DEFAULT_PODS['candidate'] * nodes if candidate is None else candidate,
-              'fetch': DEFAULT_PODS['fetch'] * nodes if fetch is None else fetch}
+    """The reviewed pod quotas, one candidate and one fetch pod by default.
+    They do not grow with workers: every CI pod runs on the one node that
+    holds the node-local CI volumes (the single node, or the CI worker)."""
+    quotas = {'candidate': DEFAULT_PODS['candidate'] if candidate is None else candidate,
+              'fetch': DEFAULT_PODS['fetch'] if fetch is None else fetch}
     if any(type(v) is not int or not 1 <= v <= MAX_PODS for v in quotas.values()):
         raise ValueError('Tekton CI pod quotas must be integers from 1 to %d' % MAX_PODS)
     return quotas

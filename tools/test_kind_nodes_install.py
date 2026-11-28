@@ -243,6 +243,21 @@ class ApplyTests(unittest.TestCase):
             self.assertEqual([u[-1] for u in node.updates()], ['c-control-plane', 'c-worker', 'c-worker2'])
             self.assertEqual(sum(1 for c in node.calls if c[1] == 'inspect'), 6, 'every node inspected and verified')
 
+    def test_caps_go_to_workers_and_never_to_a_control_plane_with_workers(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, 'cgroup.controllers').write_text('pids\n')
+            node = FakeNode()
+            want = dict(self.WANT, memory=8 * 1024 ** 3, cpus=4.0)
+            topology = {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']}
+            kind_nodes.apply_cluster(node.run, 'podman', 'c', 'kind', {}, want, topology, cgroup_root=Path(root))
+            by_node = {u[-1]: u for u in node.updates()}
+            self.assertNotIn('--cpus', by_node['c-control-plane'])
+            self.assertNotIn('--memory', by_node['c-control-plane'])
+            single = FakeNode()
+            kind_nodes.apply_cluster(single.run, 'podman', 'c', 'kind', {}, want,
+                                     {'controlPlane': 'c-control-plane', 'workers': []}, cgroup_root=Path(root))
+            self.assertIn('--cpus', single.updates()[0], 'the single node runs the sandboxed pods and gets the caps')
+
     def test_cgroup_v1_hosts_are_refused_before_any_update(self):
         node = FakeNode()
         with tempfile.TemporaryDirectory() as root, self.assertRaisesRegex(ValueError, 'cgroup v1'):
@@ -263,7 +278,11 @@ class WorkerTopologyTests(unittest.TestCase):
         self.assertEqual(config.count('  - role: worker\n'), 2)
         self.assertEqual(config.count('    image: ' + image + '\n'), 3)
         self.assertEqual(config.count('      ai-sdlc.io/node-role: sandbox\n'), 2)
-        self.assertEqual(config.count('            - key: ai-sdlc.io/sandbox\n'), 2)
+        block = ('        kind: JoinConfiguration\n        nodeRegistration:\n          taints:\n'
+                 '            - key: ai-sdlc.io/sandbox\n              value: "true"\n              effect: NoSchedule\n')
+        self.assertEqual(config.count(block), 2, 'the exact kubeadm taint block on every worker')
+        self.assertEqual(config.count('      ai-sdlc.io/ci-node: "true"\n'), 1, 'one CI worker, the first')
+        self.assertLess(config.index('ai-sdlc.io/ci-node'), config.rindex('  - role: worker'))
         self.assertTrue(config.startswith((kind_nodes.LOCAL / 'kind.yaml').read_text().rstrip('\n')))
         for workers in (-1, 5, '2', True):
             with self.assertRaises(ValueError):
@@ -300,7 +319,7 @@ class WorkerTopologyTests(unittest.TestCase):
         calls = []
         nodes = {'c-control-plane': {'metadata': {'labels': {}}, 'spec': {'taints': [{'key': kind_nodes.CONTROL_PLANE_TAINT, 'effect': 'NoSchedule'}]}},
                  'c-worker': {'metadata': {'labels': {kind_nodes.ROLE_LABEL: 'sandbox'}}, 'spec': {'taints': [dict(kind_nodes.SANDBOX_TAINT)]}},
-                 'c-worker2': {'metadata': {'labels': {}}, 'spec': {}}}
+                 'c-worker2': {'metadata': {'labels': {kind_nodes.CI_LABEL: 'true'}}, 'spec': {}}}
 
         def run(args, **_kwargs):
             calls.append(args[1:])
@@ -310,11 +329,45 @@ class WorkerTopologyTests(unittest.TestCase):
         kind_nodes.schedule(run, ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']})
         changes = [c for c in calls if c[0] != 'get']
         self.assertEqual(changes, [['taint', 'node', 'c-control-plane', kind_nodes.CONTROL_PLANE_TAINT + ':NoSchedule-'],
+                                   ['label', 'node', 'c-worker', '--overwrite', 'ai-sdlc.io/ci-node=true'],
                                    ['taint', 'node', 'c-worker2', '--overwrite', 'ai-sdlc.io/sandbox=true:NoSchedule'],
-                                   ['label', 'node', 'c-worker2', '--overwrite', 'ai-sdlc.io/node-role=sandbox']])
+                                   ['label', 'node', 'c-worker2', '--overwrite', 'ai-sdlc.io/node-role=sandbox'],
+                                   ['label', 'node', 'c-worker2', 'ai-sdlc.io/ci-node-']])
         calls.clear()
         kind_nodes.schedule(run, ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': []})
         self.assertEqual(calls, [], 'a single-node cluster is left as it is')
+
+    def test_the_ci_worker_follows_existing_ci_caches(self):
+        def volume(claim, host, namespace='ai-sdlc-ci'):
+            return {'spec': {'claimRef': {'namespace': namespace, 'name': claim}, 'nodeAffinity': {'required': {
+                'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [host]}]}]}}}}
+
+        def runner(items):
+            return lambda args, **_k: SimpleNamespace(stdout=json.dumps({'items': items}))
+        nodes = {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']}
+        self.assertEqual(kind_nodes.ci_worker(runner([]), ['kubectl'], nodes), 'c-worker')
+        cached = [volume('ai-sdlc-ci-maven-cache-abc', 'c-worker2'), volume('pvc-source', 'c-worker'),
+                  volume('data-ai-sdlc-postgres-0', 'c-control-plane', 'ai-sdlc-runtime')]
+        self.assertEqual(kind_nodes.ci_worker(runner(cached), ['kubectl'], nodes), 'c-worker2')
+        with self.assertRaisesRegex(ValueError, 'several nodes'):
+            kind_nodes.ci_worker(runner(cached + [volume('deps-' + 'a' * 64, 'c-worker')]), ['kubectl'], nodes)
+        with self.assertRaisesRegex(ValueError, 'not a worker'):
+            kind_nodes.ci_worker(runner([volume('ai-sdlc-ci-maven-cache-abc', 'c-control-plane')]), ['kubectl'], nodes)
+        self.assertIsNone(kind_nodes.ci_worker(runner(cached), ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': []}))
+
+    def test_addresses_use_the_network_kind_uses(self):
+        networks = {'c-control-plane': {'custom': {'IPAddress': '10.1.0.2'}},
+                    'c-worker': {'kind': {'IPAddress': '10.89.0.3'}, 'other': {'IPAddress': '10.2.0.3'}},
+                    'c-worker2': {'a': {'IPAddress': '1.1.1.1'}, 'b': {'IPAddress': '2.2.2.2'}}}
+        run = lambda args, **_k: SimpleNamespace(stdout=json.dumps(networks[args[-1]]))
+        self.assertEqual(kind_nodes.node_addresses(run, 'podman', ['c-control-plane', 'c-worker']),
+                         {'c-control-plane': '10.1.0.2', 'c-worker': '10.89.0.3'})
+        import os
+        with patch.dict(os.environ, KIND_EXPERIMENTAL_PODMAN_NETWORK='b'):
+            self.assertEqual(kind_nodes.node_addresses(run, 'podman', ['c-worker2']), {'c-worker2': '2.2.2.2'})
+        self.assertEqual(kind_nodes.node_addresses(run, 'podman', ['c-worker2'], required=False), {'c-worker2': None})
+        with self.assertRaisesRegex(ValueError, 'network address'):
+            kind_nodes.node_addresses(run, 'podman', ['c-worker2'])
 
     def test_sandboxed_and_ci_pods_select_prepared_workers(self):
         scheduling = kind_nodes.runtime_class_scheduling()
@@ -322,7 +375,7 @@ class WorkerTopologyTests(unittest.TestCase):
         self.assertEqual(scheduling['tolerations'], [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true',
                                                       'effect': 'NoSchedule'}])
         template = kind_nodes.tekton_pod_template()
-        self.assertEqual(template['nodeSelector'], {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX})
+        self.assertEqual(template['nodeSelector'], {kind_nodes.CI_LABEL: kind_nodes.CI})
         self.assertEqual(template['tolerations'], scheduling['tolerations'])
 
     def test_installer_refuses_workers_outside_kind_installation_scopes(self):
@@ -341,22 +394,27 @@ class WorkerBudgetTests(unittest.TestCase):
         for limit in (4096, 8192, 16384):
             self.assertLessEqual(400 + (kind_nodes.worker_capacity(limit) + 1) * 768, limit)
 
-    def test_quotas_scale_with_the_worker_count(self):
+    def test_ci_pods_and_a_verification_run_must_fit_the_one_ci_worker(self):
+        # Shared node-local volumes put every CI pod on the CI worker, so the
+        # worker count does not raise the quotas.
         report = kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=2, fetch_pods=2, workers=2)
         self.assertEqual((report['workerPodCapacity'], report['requiredPods']), (9, 7))
-        kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=10, fetch_pods=5, workers=2)
-        with self.assertRaisesRegex(ValueError, 'workers'):
-            kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=10, fetch_pods=6, workers=2)
-        with self.assertRaisesRegex(ValueError, 'workers'):
+        kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=5, fetch_pods=1, workers=4)
+        with self.assertRaisesRegex(ValueError, 'CI worker'):
+            kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=5, fetch_pods=2, workers=4)
+        with self.assertRaisesRegex(ValueError, 'CI worker'):
+            kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=1, fetch_pods=16, workers=2)
+        with self.assertRaisesRegex(ValueError, 'CI worker'):
             kind_nodes.pid_budget(2048, sandbox=True, candidate_pods=1, fetch_pods=1, workers=1)
+        kind_nodes.pid_budget(16384, sandbox=True, candidate_pods=10, fetch_pods=4, workers=2)
 
-    def test_plan_reports_scaled_default_quotas(self):
+    def test_plan_reports_default_quotas_with_workers(self):
         out = io.StringIO()
         with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
              patch.object(install, 'run'), contextlib.redirect_stdout(out):
             install.main(['plan', '--workers', '2', '--tekton-ci'])
         plan = json.loads(out.getvalue())
-        self.assertEqual(plan['tektonCI']['podQuotas'], {'candidate': 2, 'fetch': 2})
+        self.assertEqual(plan['tektonCI']['podQuotas'], {'candidate': 1, 'fetch': 1})
         self.assertEqual(plan['nodeResources']['workers'], 2)
         self.assertEqual(plan['nodeResources']['pidBudget']['workerMaxPods'], 12)
 
@@ -368,7 +426,7 @@ class InstallerWiringTests(unittest.TestCase):
         pass
 
     def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192, existing=True,
-              calls=None):
+              calls=None, workers=0, full=None):
         import os
         import subprocess
         import offline_runtime
@@ -385,10 +443,12 @@ class InstallerWiringTests(unittest.TestCase):
             if 'kube-system' in argv_ and 'jsonpath={.metadata.uid}' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, 'uid')
             if argv_[:3] == ['kind', 'get', 'nodes']:
-                return subprocess.CompletedProcess(argv_, 0, 'c-control-plane\n')
+                return subprocess.CompletedProcess(argv_, 0, 'c-control-plane\n' + ''.join(
+                    'c-worker%s\n' % ('' if i == 0 else i + 1) for i in range(workers)))
             if argv_[:2] == ['podman', 'inspect'] and 'HostConfig' in argv_[3]:
+                role = 'control-plane' if argv_[-1].endswith('control-plane') else 'worker'
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'PidsLimit': node_limit}) + '|' + json.dumps(
-                    {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': 'control-plane'}))
+                    {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': role}))
             if 'resourcequota' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'items': [
                     {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}}},
@@ -399,7 +459,29 @@ class InstallerWiringTests(unittest.TestCase):
 
         def apply_cluster(*args, **kwargs):
             applied.append(args)
+            if full is None:
+                raise self.Reached()
+            names = [args[6]['controlPlane']] + args[6]['workers']
+            return [{'node': n, 'pidsLimit': node_limit, 'memory': None, 'cpus': None, 'changed': False} for n in names]
+
+        def tekton(*args, **kwargs):
+            full['tekton'] = args
             raise self.Reached()
+        import contextlib as _contextlib
+        import network_probe
+        import tekton_ci_install
+        extra = _contextlib.ExitStack()
+        if full is not None:
+            for target, name, value in (
+                    (kind_nodes, 'schedule', None), (kind_nodes, 'node_addresses', {'c-control-plane': '10.0.0.1'}),
+                    (install, 'configure_identities', {'authority': {'policyJSON': '{}'}}),
+                    (install, 'remove_console_credential', None)):
+                extra.enter_context(patch.object(target, name, return_value=value))
+            extra.enter_context(patch.object(offline_runtime, 'reconcile_max_pods',
+                                             side_effect=lambda *a: full.setdefault('maxPods', []).append(a[3])))
+            extra.enter_context(patch.object(network_probe, 'verify',
+                                             side_effect=lambda *a, **k: full.setdefault('probes', []).append(k.get('placement')) or {}))
+            extra.enter_context(patch.object(tekton_ci_install, 'install', side_effect=tekton))
         policy = {'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'uid'}},
                   'data': {'policy.json': json.dumps({'repository': 'os-santiago/ai-sdlc', 'environment': 'ai-sdlc-production'})}}
         with tempfile.TemporaryDirectory() as directory:
@@ -412,9 +494,30 @@ class InstallerWiringTests(unittest.TestCase):
                  patch.object(install, 'host_prerequisites'), patch.object(install, 'run', side_effect=run), \
                  patch.object(install, 'read_resource', return_value=policy), \
                  patch.object(kind_nodes, 'apply_cluster', side_effect=apply_cluster), \
-                 patch.object(offline_runtime, 'install', side_effect=AssertionError('nodes first')):
+                 patch.object(offline_runtime, 'install', side_effect=AssertionError('nodes first')), extra:
                 install.main(argv + ['--cluster', 'c', '--provider', 'podman'])
         return applied
+
+    def test_workers_flow_through_to_tekton_probes_and_max_pods(self):
+        full = {}
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], workers=2, full=full)
+        self.assertEqual(full['tekton'][7], kind_nodes.tekton_pod_template(), 'the CI-worker default pod template')
+        self.assertEqual(full['maxPods'], ['c-worker', 'c-worker2'])
+        self.assertEqual(full['probes'], [None, {'nodeSelector': {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX},
+                                                 'tolerations': [kind_nodes.toleration()]}])
+        single = {}
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], full=single)
+        self.assertIsNone(single['tekton'][7])
+        self.assertNotIn('maxPods', single)
+        self.assertEqual(single['probes'], [None])
+
+    def test_a_different_worker_count_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'kind cannot change'):
+            self.drive(['local', '--workers', '1'])
+        with self.assertRaisesRegex(ValueError, 'kind cannot change'):
+            self.drive(['local', '--workers', '0'], workers=2)
 
     def test_local_reconciles_the_nodes(self):
         with self.assertRaises(self.Reached):
@@ -451,6 +554,18 @@ class InstallerWiringTests(unittest.TestCase):
             self.drive(['local'], installed_candidate=10, node_limit=4096)
         with self.assertRaisesRegex(ValueError, 'limit 8192 cannot hold'):
             self.drive(['local', '--node-pids-limit', '8192'], installed_candidate=10, node_limit=16384)
+
+    def test_installed_quotas_count_only_when_the_limit_drops(self):
+        # Lowering only the quotas on an unchanged limit is allowed, so an
+        # over-budget installation can be brought back within the budget.
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], installed_candidate=10)
+        # Omitting --tekton-ci keeps the installed quotas, which still count.
+        with self.assertRaisesRegex(ValueError, 'cannot hold'):
+            self.drive(['local'], installed_candidate=10)
+        # Lowering the limit counts both.
+        with self.assertRaisesRegex(ValueError, 'cannot hold'):
+            self.drive(['local', '--tekton-ci', '--node-pids-limit', '6000'], installed_candidate=10, node_limit=16384)
 
     def test_a_verification_run_counts_for_sandbox_and_an_installed_runtime(self):
         # 1100 + 3 x 768 = 3404 > 3000.

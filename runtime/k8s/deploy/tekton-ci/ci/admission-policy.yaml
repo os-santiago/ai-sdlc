@@ -11,7 +11,7 @@
 # specifications (feature flag), so a run cannot bring its own tasks. Pod
 # templates and per-task overrides are allowlisted field by field (on a kind
 # cluster with workers Tekton's defaulting adds the installer's default pod
-# template, the sandbox-worker nodeSelector and toleration, to the run
+# template, the CI-worker nodeSelector and sandbox toleration, to the run
 # template; only those exact values are admitted): env,
 # volumes, DNS or host aliases there would let a run reshape candidate pods
 # (for example fake the address the egress gate probes, or load a candidate
@@ -44,7 +44,7 @@ spec:
         (!has(object.spec.taskRunTemplate) || !has(object.spec.taskRunTemplate.podTemplate) ||
          (object.spec.taskRunTemplate.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName', 'nodeSelector', 'tolerations']) &&
           (!has(object.spec.taskRunTemplate.podTemplate.nodeSelector) ||
-           object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/node-role': 'sandbox'}) &&
+           object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}) &&
           (!has(object.spec.taskRunTemplate.podTemplate.tolerations) ||
            object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true', 'effect': 'NoSchedule'}]) &&
           (!has(object.spec.taskRunTemplate.podTemplate.runtimeClassName) ||
@@ -60,7 +60,7 @@ spec:
               object.spec.pipelineRef.name == 'ai-sdlc-maven-build-test' && s.pipelineTaskName == 'build-test')))) &&
           (!has(s.stepSpecs) || s.stepSpecs.all(x, x.all(k, k in ['name', 'computeResources']))) &&
           (!has(s.sidecarSpecs) || s.sidecarSpecs.all(x, x.all(k, k in ['name', 'computeResources'])))))
-      message: pod templates allow only automountServiceAccountToken, securityContext, the offline runtime class, on build-test alone the candidate priority class, and in the run template the sandbox-worker placement that Tekton's default pod template adds on a cluster with workers; step and sidecar overrides only computeResources
+      message: pod templates allow only automountServiceAccountToken, securityContext, the offline runtime class, on build-test alone the candidate priority class, and in the run template the CI-worker placement that Tekton's default pod template adds on a cluster with workers; step and sidecar overrides only computeResources
     - expression: >-
         has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
         object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update', 'ai-sdlc-dependency-audit']
