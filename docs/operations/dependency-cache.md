@@ -207,6 +207,19 @@ node (for example local-path). On a multi-node cluster with network block
 storage they fail with Multi-Attach errors; use a ReadWriteMany class (NFS,
 CephFS, a cloud file service).
 
+On a local kind cluster created with `--workers` (see
+[kind node resources](kind-node-resources.md#worker-nodes)), local-path
+volumes stay ReadWriteOnce and node-bound. The Tekton fill runs on a worker
+(Tekton's default pod template), local-path gives the volume a node affinity
+for that worker, and the sealed claim keeps it. Every verification run that
+mounts the cache is therefore scheduled onto that one worker: the three
+concurrent runs of a verification (baseline, cross, candidate) share it, and
+the worker's kubelet `maxPods` keeps them within its pid limit; extra pods wait
+until one ends. `seal` refuses a volume bound to a node that the
+`ai-sdlc-offline` RuntimeClass cannot schedule onto (for example a fill that
+ran on the control-plane), because every verification of that key would stay
+pending.
+
 `seal` works as follows:
 - It refuses a claim with another key, and one that a running pod still uses.
 - It retains the volume, deletes the work claim, rebinds the volume

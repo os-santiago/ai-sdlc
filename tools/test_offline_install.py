@@ -23,6 +23,9 @@ default_runtime_name = "runc"
             calls.append(args)
             if args[:3] == ['kind', 'get', 'nodes']:
                 return subprocess.CompletedProcess(args, 0, 'test-control-plane\n')
+            if args[:2] == ['podman', 'inspect'] and 'HostConfig' in args[3]:
+                return subprocess.CompletedProcess(args, 0, '{"PidsLimit": 8192}|' + json.dumps(
+                    {'io.x-k8s.kind.cluster': 'test', 'io.x-k8s.kind.role': 'control-plane'}) + '\n')
             if args[:2] == ['podman', 'inspect']:
                 return subprocess.CompletedProcess(args, 0, 'test\n')
             if args[3:5] == ['test', '-e']:
@@ -34,6 +37,47 @@ default_runtime_name = "runc"
             with self.assertRaisesRegex(ValueError, 'imports'):
                 runtime.install(['kubectl'], 'podman', 'kind', 'test', 'uid', Path('/unused'), 'unused')
         self.assertTrue(all('tee' not in args and 'cp' not in args and 'systemctl' not in args for args in calls))
+
+    def test_every_worker_is_checked_before_any_is_prepared_then_labelled(self):
+        import kind_nodes
+        events, commands, created = [], [], []
+
+        def run(args, **kwargs):
+            commands.append(args)
+            if args[-3:] == ['create', '-f', '-']:
+                created.append(json.loads(kwargs['input']))
+            if 'runtimeclass' in args and '--ignore-not-found' in args:
+                return subprocess.CompletedProcess(args, 0, existing)
+            if 'runtimeclass' in args:
+                return subprocess.CompletedProcess(args, 0, json.dumps({'metadata': {'uid': 'rc'}, 'scheduling': {'x': 1}}))
+            return subprocess.CompletedProcess(args, 0, '')
+        lock = {'version': 'v', 'sourceRevision': 'r', 'sha256': 'a' * 64, 'files': {}}
+        topology = {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']}
+        for existing in ('', json.dumps({'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'uid'}}, 'handler': runtime.HANDLER})):
+            events.clear()
+            commands.clear()
+            with patch.object(runtime.subprocess, 'run', side_effect=run), \
+                 patch.object(kind_nodes, 'topology', return_value=topology), \
+                 patch.object(runtime, 'load_lock', return_value=lock), \
+                 patch.object(runtime, 'prepare_node', side_effect=lambda provider, node, *a: events.append(('check', node)) or
+                              {'node': node, 'marker': 'm', 'owner': 'o'}), \
+                 patch.object(runtime, 'install_node', side_effect=lambda k, p, plan, *a, **kw: events.append(('install', plan['node'], kw['worker'])) or
+                              {'scopeTasksMax': 3072, 'podPidsLimit': 768, 'nodePidsLimit': 8192, 'maxPods': 12}), \
+                 patch.object(probe, 'verify', return_value={'gvisor': True}), \
+                 patch.object(probe, 'verify_nodes', side_effect=lambda k, i, h, nodes: events.append(('probe', tuple(nodes))) or {}):
+                if existing:
+                    with self.assertRaisesRegex(ValueError, 'schedules differently'):
+                        runtime.install(['kubectl'], 'podman', 'kind', 'c', 'uid', Path('/unused'), 'image')
+                    self.assertEqual(events, [('check', 'c-worker'), ('check', 'c-worker2')], 'refused before any change')
+                    continue
+                report = runtime.install(['kubectl'], 'podman', 'kind', 'c', 'uid', Path('/unused'), 'image')
+            self.assertEqual(events, [('check', 'c-worker'), ('check', 'c-worker2'), ('install', 'c-worker', True),
+                                      ('install', 'c-worker2', True), ('probe', ('c-worker', 'c-worker2'))])
+            labels = [c for c in commands if 'label' in c]
+            self.assertEqual([c[-1] for c in labels], ['ai-sdlc.io/offline-runtime=ready'] * 2)
+            self.assertEqual(created[0]['scheduling'], kind_nodes.runtime_class_scheduling())
+            self.assertEqual(sorted(report['nodes']), ['c-worker', 'c-worker2'])
+            self.assertEqual(report['scopeTasksMax'], 3072)
 
     def test_configuration_preserves_default_and_rejects_conflicts(self):
         base = '''version = 2
@@ -265,6 +309,31 @@ class SandboxTaskLimitTests(unittest.TestCase):
             runtime.pod_pid_limit(read, write, move, ['podman', 'exec', 'n'], lambda: None)
         self.assertEqual(files[runtime.KUBELET_CONFIG], original)
         self.assertEqual(sum(1 for c in calls if c[3:] == ['systemctl', 'restart', 'kubelet']), 2)
+
+    def test_workers_also_get_a_bounded_max_pods(self):
+        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 768\n')
+        command = self.moving(files, command)
+        applied = runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'],
+                                           lambda: {'podPidsLimit': 768, 'maxPods': 12}, {'podPidsLimit': 768, 'maxPods': 12})
+        self.assertEqual(applied, {'maxPods': 12, 'podPidsLimit': 768})
+        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARK + '\nmaxPods: 12\npodPidsLimit: 768\n'))
+        # A later pid limit changes the marked value; the pod limit alone leaves it alone.
+        applied = runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'],
+                                           lambda: {'podPidsLimit': 768, 'maxPods': 22}, {'podPidsLimit': 768, 'maxPods': 22})
+        self.assertEqual(files[runtime.KUBELET_CONFIG].count('maxPods:'), 1)
+        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768), 768)
+        self.assertIn('maxPods: 22', files[runtime.KUBELET_CONFIG])
+        files, calls, read, write, command = self.fake(kubelet='maxPods: 50\npodPidsLimit: 768\n')
+        with self.assertRaisesRegex(ValueError, 'different maxPods'):
+            runtime.kubelet_settings(read, write, command, ['podman', 'exec', 'n'], lambda: {}, {'podPidsLimit': 768, 'maxPods': 12})
+
+    def test_runtime_class_schedules_only_with_workers(self):
+        single = runtime.runtime_class('uid', [])
+        self.assertNotIn('scheduling', single)
+        self.assertEqual(single['metadata']['annotations'], {'ai-sdlc.io/cluster-uid': 'uid'})
+        multi = runtime.runtime_class('uid', ['c-worker'])
+        self.assertEqual(multi['scheduling']['nodeSelector'], {'ai-sdlc.io/offline-runtime': 'ready'})
+        self.assertEqual(multi['handler'], runtime.HANDLER)
 
     def test_limits_are_bounded_and_kind_config_matches(self):
         share = runtime.tasks_share(self.desired())

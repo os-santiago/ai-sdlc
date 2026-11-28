@@ -198,7 +198,7 @@ def own(items, cluster_uid):
     return items
 
 
-def desired_tekton(items, lock, config, cluster_uid):
+def desired_tekton(items, lock, config, cluster_uid, pod_template=None):
     names = {key(i) for i in items}
     expected = ({('Namespace', '', n) for n in lock['namespaces']}
                 | {('CustomResourceDefinition', '', n) for n in lock['customResourceDefinitions']}
@@ -227,6 +227,14 @@ def desired_tekton(items, lock, config, cluster_uid):
         if unknown:
             raise ValueError('Tekton configuration sets unknown keys: ' + ', '.join(sorted(unknown)))
         data.update(overrides)
+    if pod_template is not None:
+        # On a cluster with workers every task pod runs where build-test pods
+        # can follow it (tools/kind_nodes.py tekton_pod_template). Tekton
+        # merges a run's own pod template over this default.
+        defaults = by_name.get('tekton-pipelines/config-defaults')
+        if defaults is None:
+            raise ValueError('Tekton release lacks config-defaults for the default pod template')
+        defaults.setdefault('data', {})['default-pod-template'] = json.dumps(pod_template, sort_keys=True)
     return own(items, cluster_uid)
 
 
@@ -245,10 +253,12 @@ def desired_ci(items, cluster_uid):
     return own(items, cluster_uid)
 
 
-def pod_quotas(candidate=None, fetch=None):
-    """The reviewed pod quotas, defaulting to one candidate and one fetch pod."""
-    quotas = {'candidate': DEFAULT_PODS['candidate'] if candidate is None else candidate,
-              'fetch': DEFAULT_PODS['fetch'] if fetch is None else fetch}
+def pod_quotas(candidate=None, fetch=None, workers=0):
+    """The reviewed pod quotas: one candidate and one fetch pod per sandbox
+    node (the single node, or each worker) unless set explicitly."""
+    nodes = max(1, workers)
+    quotas = {'candidate': DEFAULT_PODS['candidate'] * nodes if candidate is None else candidate,
+              'fetch': DEFAULT_PODS['fetch'] * nodes if fetch is None else fetch}
     if any(type(v) is not int or not 1 <= v <= MAX_PODS for v in quotas.values()):
         raise ValueError('Tekton CI pod quotas must be integers from 1 to %d' % MAX_PODS)
     return quotas
@@ -405,7 +415,7 @@ def plan():
             'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
-def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None):
+def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None, pod_template=None):
     quotas = quotas or pod_quotas()
     lock, lock_digest = lockfile()
     config, config_digest = configuration()
@@ -413,7 +423,7 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
     claims = cache_claims(repositories)
     raw = fetch_release(cache, lock)
     verify_release(raw, lock)
-    tekton = desired_tekton(objects(run, kubectl, raw), lock, config, cluster_uid)
+    tekton = desired_tekton(objects(run, kubectl, raw), lock, config, cluster_uid, pod_template)
     require_ownership(run, kubectl, tekton + [{'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': CI_NAMESPACE}}], cluster_uid)
     apply(run, kubectl, tekton)
     wait_ready(run, kubectl, lock, timeout)
@@ -436,6 +446,7 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None
         raise ValueError('Tekton CI is not ready after installation; owned state is retained for reapplication')
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
                 admissionAttempts=attempts, releasedAssistants=released, podQuotas=quotas,
+                **({'defaultPodTemplate': pod_template} if pod_template is not None else {}),
                 cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 

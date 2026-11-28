@@ -52,6 +52,8 @@ SIZE = re.compile(r'[1-9][0-9]{0,3}Gi')
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 ACCESS_MODES = ('ReadWriteOnce', 'ReadWriteMany')
 RECLAIM_ANNOTATION = 'ai-sdlc.io/original-reclaim-policy'
+RUNTIME_CLASS = 'ai-sdlc-offline'
+HOSTNAME = 'kubernetes.io/hostname'
 
 
 def dependencies(manifest):
@@ -138,9 +140,11 @@ def revision_key(run, manifest, repository, revision):
 
 def work_claim(key, namespace, size, storage_class=None, access_mode='ReadWriteOnce'):
     """The empty claim the maven-dependencies Task fills. ReadWriteOnce
-    suits node-local storage (single node, or all runs on the volume's node);
-    on a multi-node cluster use a ReadWriteMany class, so the three concurrent
-    verification runs can attach the sealed volume on any node."""
+    suits node-local storage: on a single node, or on a cluster with workers
+    where the volume's node affinity keeps every pod that mounts it (the fill
+    task and the three concurrent verification runs) on its worker, and seal
+    checks that worker can run sandboxed pods. A ReadWriteMany class lets the
+    runs attach the sealed volume on any node instead."""
     if (not NAMESPACE.fullmatch(namespace) or namespace == VERIFIER_NAMESPACE or not SIZE.fullmatch(size)
             or access_mode not in ACCESS_MODES):
         raise ValueError('Invalid work namespace, size or access mode')
@@ -271,6 +275,44 @@ def finish(cluster, key, volume_name, sleep):
     return name
 
 
+def volume_nodes(volume):
+    """Hostnames a node-local volume is bound to (its required node
+    affinity), or None for a volume reachable from any node."""
+    terms = (((volume.get('spec') or {}).get('nodeAffinity') or {}).get('required') or {}).get('nodeSelectorTerms') or []
+    if not terms:
+        return None
+    hosts = set()
+    for term in terms:
+        expressions = term.get('matchExpressions') or []
+        if term.get('matchFields') or not expressions or any(
+                e.get('key') != HOSTNAME or e.get('operator') != 'In' for e in expressions):
+            raise RuntimeError('The cache volume has a node affinity this tool cannot check')
+        for expression in expressions:
+            hosts.update(expression.get('values') or [])
+    return sorted(hosts)
+
+
+def require_sandbox_node(cluster, volume):
+    """The verification runs that mount the sealed claim use the offline
+    RuntimeClass. A node-local volume (local-path, ReadWriteOnce) draws every
+    pod that mounts it to its node through the volume's node affinity, so all
+    three concurrent runs (baseline, cross, candidate) land there. On a
+    cluster with workers the RuntimeClass schedules only onto prepared nodes;
+    a volume filled anywhere else would leave every verification of the key
+    pending, so it is refused before the hand-over."""
+    runtime = cluster.get('runtimeclass', RUNTIME_CLASS)
+    selector = ((runtime or {}).get('scheduling') or {}).get('nodeSelector') or {}
+    hosts = volume_nodes(volume)
+    if not selector or hosts is None:
+        return None
+    for host in hosts:
+        labels = ((cluster.get('node', host) or {}).get('metadata') or {}).get('labels') or {}
+        if all(labels.get(k) == v for k, v in selector.items()):
+            return host
+    raise RuntimeError('The cache volume is bound to %s, where sandboxed verification pods cannot run; fill it '
+                       'with a Tekton run on a sandbox node' % ', '.join(hosts))
+
+
 def seal(cluster, key, namespace=CI_NAMESPACE, sleep=time.sleep):
     """Move the filled volume from the work claim to the sealed verifier claim.
 
@@ -300,6 +342,7 @@ def seal(cluster, key, namespace=CI_NAMESPACE, sleep=time.sleep):
             raise RuntimeError('A pod still uses %s; seal it after the dependency task has finished' % name)
     elif volume is None:
         raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
+    require_sandbox_node(cluster, volume or cluster.get('pv', work['spec']['volumeName']) or {})
     if volume is None:
         volume = retain(cluster, work['spec']['volumeName'], key)
     volume_name = volume['metadata']['name']
@@ -329,8 +372,9 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument('--size', default='8Gi', help='work claim size (prepare; default %(default)s)')
     parser.add_argument('--storage-class', help='StorageClass of the work claim (prepare; default: the cluster default)')
     parser.add_argument('--access-mode', choices=ACCESS_MODES, default='ReadWriteOnce',
-                        help='work claim access mode (prepare): ReadWriteOnce needs node-local storage on one node; '
-                             'use ReadWriteMany on multi-node clusters (default %(default)s)')
+                        help='work claim access mode (prepare): ReadWriteOnce keeps the fill and every verification '
+                             'run on the volume\'s node (seal checks it can run sandboxed pods); ReadWriteMany lets '
+                             'them use any node (default %(default)s)')
     args = parser.parse_args(argv)
     raw = args.project_manifest.read_bytes()
     if len(raw) > 16384:

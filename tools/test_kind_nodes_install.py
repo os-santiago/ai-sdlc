@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 from types import SimpleNamespace
 import unittest
@@ -161,3 +163,112 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WorkerTopologyTests(unittest.TestCase):
+    def test_zero_workers_is_the_committed_kind_manifest(self):
+        self.assertEqual(kind_nodes.cluster_config(0), (kind_nodes.LOCAL / 'kind.yaml').read_text())
+        self.assertEqual(kind_nodes.cluster_config(None), (kind_nodes.LOCAL / 'kind.yaml').read_text())
+
+    def test_workers_share_the_pinned_image_and_carry_the_sandbox_taint(self):
+        config = kind_nodes.cluster_config(2)
+        image = kind_nodes.IMAGE_LINE.findall((kind_nodes.LOCAL / 'kind.yaml').read_text())[0]
+        self.assertEqual(config.count('  - role: worker\n'), 2)
+        self.assertEqual(config.count('    image: ' + image + '\n'), 3)
+        self.assertEqual(config.count('      ai-sdlc.io/node-role: sandbox\n'), 2)
+        self.assertEqual(config.count('            - key: ai-sdlc.io/sandbox\n'), 2)
+        self.assertTrue(config.startswith((kind_nodes.LOCAL / 'kind.yaml').read_text().rstrip('\n')))
+        for workers in (-1, 5, '2', True):
+            with self.assertRaises(ValueError):
+                kind_nodes.validate_workers(workers)
+
+    def fake(self, nodes):
+        def run(args, **_kwargs):
+            if args[1:3] == ['get', 'nodes']:
+                return SimpleNamespace(stdout='\n'.join(nodes) + '\n')
+            if args[1] == 'inspect' and 'HostConfig' in args[3]:
+                cluster, role = nodes[args[-1]]
+                return SimpleNamespace(stdout='{"PidsLimit": 8192}|' + json.dumps(
+                    {'io.x-k8s.kind.cluster': cluster, 'io.x-k8s.kind.role': role}))
+            if args[1] == 'inspect':
+                return SimpleNamespace(stdout=json.dumps({'kind': {'IPAddress': '10.89.0.%d' % (10 + sorted(nodes).index(args[-1]))}}))
+            raise AssertionError(args)
+        return run
+
+    def test_topology_accepts_only_kind_naming_and_labels(self):
+        nodes = {'c-control-plane': ('c', 'control-plane'), 'c-worker': ('c', 'worker'), 'c-worker2': ('c', 'worker')}
+        topology = kind_nodes.topology(self.fake(nodes), 'podman', 'kind', 'c', {})
+        self.assertEqual(topology, {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']})
+        self.assertEqual(kind_nodes.sandbox_nodes(topology), ['c-worker', 'c-worker2'])
+        self.assertEqual(kind_nodes.sandbox_nodes({'controlPlane': 'c-control-plane', 'workers': []}), ['c-control-plane'])
+        self.assertEqual(kind_nodes.node_addresses(self.fake(nodes), 'podman', ['c-control-plane', 'c-worker']),
+                         {'c-control-plane': '10.89.0.10', 'c-worker': '10.89.0.11'})
+        for bad in ({'c-control-plane': ('other', 'control-plane')},
+                    {'c-control-plane': ('c', 'control-plane'), 'c-extra': ('c', 'worker')},
+                    {'c-worker': ('c', 'worker')}):
+            with self.assertRaises(ValueError):
+                kind_nodes.topology(self.fake(bad), 'podman', 'kind', 'c', {})
+
+    def test_schedule_untaints_the_control_plane_and_restores_worker_marks(self):
+        calls = []
+        nodes = {'c-control-plane': {'metadata': {'labels': {}}, 'spec': {'taints': [{'key': kind_nodes.CONTROL_PLANE_TAINT, 'effect': 'NoSchedule'}]}},
+                 'c-worker': {'metadata': {'labels': {kind_nodes.ROLE_LABEL: 'sandbox'}}, 'spec': {'taints': [dict(kind_nodes.SANDBOX_TAINT)]}},
+                 'c-worker2': {'metadata': {'labels': {}}, 'spec': {}}}
+
+        def run(args, **_kwargs):
+            calls.append(args[1:])
+            if args[1:3] == ['get', 'node']:
+                return SimpleNamespace(stdout=json.dumps(nodes[args[3]]))
+            return SimpleNamespace(stdout='')
+        kind_nodes.schedule(run, ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']})
+        changes = [c for c in calls if c[0] != 'get']
+        self.assertEqual(changes, [['taint', 'node', 'c-control-plane', kind_nodes.CONTROL_PLANE_TAINT + ':NoSchedule-'],
+                                   ['taint', 'node', 'c-worker2', '--overwrite', 'ai-sdlc.io/sandbox=true:NoSchedule'],
+                                   ['label', 'node', 'c-worker2', '--overwrite', 'ai-sdlc.io/node-role=sandbox']])
+        calls.clear()
+        kind_nodes.schedule(run, ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': []})
+        self.assertEqual(calls, [], 'a single-node cluster is left as it is')
+
+    def test_sandboxed_and_ci_pods_select_prepared_workers(self):
+        scheduling = kind_nodes.runtime_class_scheduling()
+        self.assertEqual(scheduling['nodeSelector'], {kind_nodes.READY_LABEL: kind_nodes.READY})
+        self.assertEqual(scheduling['tolerations'], [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true',
+                                                      'effect': 'NoSchedule'}])
+        template = kind_nodes.tekton_pod_template()
+        self.assertEqual(template['nodeSelector'], {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX})
+        self.assertEqual(template['tolerations'], scheduling['tolerations'])
+
+    def test_installer_refuses_workers_outside_kind_installation_scopes(self):
+        for argv in (['status', '--workers', '2'], ['credentials', '--github-auth', 'gh-cli', '--workers', '1'],
+                     ['plan', '--workers', '9']):
+            with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
+                 self.assertRaisesRegex(ValueError, 'workers'):
+                install.main(argv)
+
+
+class WorkerBudgetTests(unittest.TestCase):
+    def test_worker_max_pods_hold_the_pid_limit(self):
+        # (8192 - 400) // 768 - 1 = 9 pods, plus kindnet, kube-proxy and one helper slot.
+        self.assertEqual(kind_nodes.worker_capacity(8192), 9)
+        self.assertEqual(kind_nodes.max_pods(8192), 12)
+        for limit in (4096, 8192, 16384):
+            self.assertLessEqual(400 + (kind_nodes.worker_capacity(limit) + 1) * 768, limit)
+
+    def test_quotas_scale_with_the_worker_count(self):
+        report = kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=2, fetch_pods=2, workers=2)
+        self.assertEqual((report['workerPodCapacity'], report['requiredPods']), (9, 7))
+        kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=10, fetch_pods=5, workers=2)
+        with self.assertRaisesRegex(ValueError, 'workers'):
+            kind_nodes.pid_budget(8192, sandbox=True, candidate_pods=10, fetch_pods=6, workers=2)
+        with self.assertRaisesRegex(ValueError, 'workers'):
+            kind_nodes.pid_budget(2048, sandbox=True, candidate_pods=1, fetch_pods=1, workers=1)
+
+    def test_plan_reports_scaled_default_quotas(self):
+        out = io.StringIO()
+        with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+             patch.object(install, 'run'), contextlib.redirect_stdout(out):
+            install.main(['plan', '--workers', '2', '--tekton-ci'])
+        plan = json.loads(out.getvalue())
+        self.assertEqual(plan['tektonCI']['podQuotas'], {'candidate': 2, 'fetch': 2})
+        self.assertEqual(plan['nodeResources']['workers'], 2)
+        self.assertEqual(plan['nodeResources']['pidBudget']['workerMaxPods'], 12)

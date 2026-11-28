@@ -117,3 +117,48 @@ def verify(kubectl, image, runtime_class):
                 tcp6MappedBlocked=True, udp6MappedBlocked=True, sccVersion=scc,
                 observedPodUID=observed_uid, temporaryResourcesRemoved=True,
                 noNetworkPolicyRequired=True, missingHandlerFailsClosed=True)
+
+
+def verify_nodes(kubectl, image, runtime_class, nodes):
+    """Run the sandbox's local checks once on each prepared node.
+
+    verify() proves the network boundary with native positive controls once;
+    this proves that every node can start a sandboxed pod: one offline pod
+    pinned to each node by its hostname label, the same local checks, and the
+    node the scheduler actually used."""
+    namespace = 'ai-sdlc-offlinenodes-' + secrets.token_hex(6)
+    uid = None
+
+    def call(args, value=None):
+        result = subprocess.run([str(v) for v in kubectl] + args, text=True,
+                                input=json.dumps(value) if value is not None else None,
+                                capture_output=True, timeout=110)
+        if result.returncode:
+            raise ValueError('Offline runtime node probe command failed')
+        return result.stdout
+
+    results = {}
+    try:
+        created = json.loads(call(['create', '-f', '-', '-o', 'json'], {
+            'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
+            'labels': {'app.kubernetes.io/part-of': 'ai-sdlc-offline-conformance',
+                       'pod-security.kubernetes.io/enforce': 'restricted'}}}))
+        uid = created['metadata']['uid']
+        names = {}
+        for index, node in enumerate(nodes):
+            name = 'offline-' + str(index)
+            value = pod(namespace, name, image, runtime_class)
+            value['spec']['nodeSelector'] = {'kubernetes.io/hostname': node}
+            call(['create', '-f', '-'], value)
+            names[node] = name
+        call(['-n', namespace, 'wait', '--for=condition=Ready', 'pods', '--all', '--timeout=120s'])
+        for node, name in names.items():
+            scheduled = call(['-n', namespace, 'get', 'pod', name, '-o', 'jsonpath={.spec.nodeName}']).strip()
+            if scheduled != node:
+                raise ValueError('Offline node probe ran on an unexpected node')
+            checked_local(call(['-n', namespace, 'exec', name, '--', 'node', '-e', SCRIPT, 'local']))
+            results[node] = {'scheduledOn': scheduled, 'gvisor': True, 'localChecks': True}
+    finally:
+        if uid:
+            network_probe.cleanup_namespace(call, namespace, uid)
+    return results

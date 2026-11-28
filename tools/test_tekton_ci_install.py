@@ -157,6 +157,21 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual(item['metadata']['labels'][tekton.OWNER_LABEL], 'owned')
         self.assertEqual(items[0]['metadata']['labels']['a'], 'b', 'upstream labels are preserved')
 
+    def test_workers_get_a_default_pod_template_on_sandbox_nodes(self):
+        lock = synthetic('x')[1]
+        defaults = {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': 'config-defaults', 'namespace': 'tekton-pipelines'},
+                    'data': {'_example': 'x'}}
+        template = {'nodeSelector': {'ai-sdlc.io/node-role': 'sandbox'}, 'tolerations': [{'key': 'ai-sdlc.io/sandbox'}]}
+        items = tekton.desired_tekton(release_items(extra=(copy.deepcopy(defaults),)), lock, CONFIG, UID, template)
+        found = next(i for i in items if i['metadata']['name'] == 'config-defaults')
+        self.assertEqual(json.loads(found['data']['default-pod-template']), template)
+        items = tekton.desired_tekton(release_items(extra=(copy.deepcopy(defaults),)), lock, CONFIG, UID)
+        self.assertNotIn('default-pod-template', next(i for i in items if i['metadata']['name'] == 'config-defaults')['data'])
+        with self.assertRaisesRegex(ValueError, 'config-defaults'):
+            tekton.desired_tekton(release_items(), lock, CONFIG, UID, template)
+        self.assertEqual(tekton.pod_quotas(workers=3), {'candidate': 3, 'fetch': 3})
+        self.assertEqual(tekton.pod_quotas(2, None, 3), {'candidate': 2, 'fetch': 3})
+
     def test_desired_tekton_refuses_drift_from_the_lock(self):
         _, lock = synthetic('')
         cases = [

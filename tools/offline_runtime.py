@@ -1,4 +1,4 @@
-"""Optional, pinned offline gVisor runtime inside an installer-owned kind node.
+"""Optional, pinned offline gVisor runtime inside installer-owned kind nodes.
 
 This never launches business work or changes the default runtime. The node is
 trusted infrastructure; untrusted executors must have no node/API credentials.
@@ -210,45 +210,60 @@ def sandbox_task_limit(read, write, command, node_exec, minimum=None):
 
 
 def pod_pid_limit(read, write, command, node_exec, configz):
-    """Bound every pod's pids with the kubelet podPidsLimit, idempotently and atomically.
+    """Bound every pod's pids with the kubelet podPidsLimit (kubelet_settings)."""
+    policy = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())
+    return kubelet_settings(read, write, command, node_exec, lambda: {'podPidsLimit': configz()},
+                            {'podPidsLimit': policy['podPidsLimit']},
+                            {'podPidsLimit': set(policy.get('previous', []))})['podPidsLimit']
 
-    New clusters get it from deploy/local/kind.yaml. On an existing node the
-    installer stages the kubelet configuration with the reviewed value,
-    checks the staged file is exactly the original plus that value, moves it
-    into place, restarts the kubelet and confirms through the node's /configz
-    that the value is in effect; on any failure it restores the original file
-    and restarts the kubelet again. A value ai-sdlc set before (marked, or an
-    earlier reviewed value) is upgraded; any other value is refused. Pods
+
+def kubelet_settings(read, write, command, node_exec, configz, desired, previous=None):
+    """Set reviewed kubelet configuration values, idempotently and atomically.
+
+    desired maps a KubeletConfiguration field (podPidsLimit on every node,
+    maxPods on workers) to its integer value. New clusters get podPidsLimit
+    from deploy/local/kind.yaml. On an existing node the installer stages the
+    kubelet configuration with the reviewed values, checks the staged file is
+    exactly the original plus those values, moves it into place, restarts the
+    kubelet and confirms through the node's /configz that the values are in
+    effect; on any failure it restores the original file and restarts the
+    kubelet again. A value ai-sdlc set before (marked, or an earlier reviewed
+    value listed in previous) is upgraded; any other value is refused. Pods
     created before the change keep running without the bound until they are
     recreated.
     """
-    policy = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())
-    expected, previous = policy['podPidsLimit'], set(policy.get('previous', []))
+    previous = previous or {}
     config = read(KUBELET_CONFIG)
     if config is None:
         raise ValueError('Kubelet configuration is unavailable on the kind node')
     lines = config.splitlines()
-    values = [line for line in lines if line.startswith('podPidsLimit:')]
-    if values == ['podPidsLimit: ' + str(expected)]:
-        if configz() != expected:
-            # The file holds the value but the running kubelet does not (for
+    wanted = [key + ': ' + str(value) for key, value in sorted(desired.items())]
+    values = {key: [line for line in lines if line.startswith(key + ':')] for key in desired}
+
+    def applied():
+        reported = configz()
+        return all(reported.get(key) == value for key, value in desired.items())
+    if all(values[key] == [key + ': ' + str(value)] for key, value in desired.items()):
+        if not applied():
+            # The file holds the values but the running kubelet does not (for
             # example an earlier run stopped after the move, before the
             # restart): restart it and check again.
             command(node_exec + ['systemctl', 'restart', 'kubelet'])
-            if configz() != expected:
-                raise ValueError('The kubelet does not report the configured podPidsLimit after a restart')
-        return expected
-    ours = KUBELET_MARK in lines or (len(values) == 1 and values[0].split(':', 1)[1].strip().isdigit()
-                                     and int(values[0].split(':', 1)[1]) in previous)
-    if values and not ours:
-        raise ValueError('The kind node kubelet already sets a different podPidsLimit')
-    kept = [line for line in lines if line != KUBELET_MARK and not line.startswith('podPidsLimit:')]
-    desired = '\n'.join(kept + [KUBELET_MARK, 'podPidsLimit: ' + str(expected)]) + '\n'
+            if not applied():
+                raise ValueError('The kubelet does not report the configured ' + ', '.join(sorted(desired)) + ' after a restart')
+        return dict(desired)
+    for key, found in values.items():
+        ours = KUBELET_MARK in lines or (len(found) == 1 and found[0].split(':', 1)[1].strip().isdigit()
+                                         and int(found[0].split(':', 1)[1]) in previous.get(key, set()))
+        if found and found != [key + ': ' + str(desired[key])] and not ours:
+            raise ValueError('The kind node kubelet already sets a different ' + key)
+    kept = [line for line in lines if line != KUBELET_MARK and not any(line.startswith(key + ':') for key in desired)]
+    desired_text = '\n'.join(kept + [KUBELET_MARK] + wanted) + '\n'
     stage = KUBELET_CONFIG + '.ai-sdlc-' + secrets.token_hex(6)
-    write(stage, desired)
+    write(stage, desired_text)
     try:
         staged = read(stage)
-        if staged != desired or [line for line in staged.splitlines() if line not in (KUBELET_MARK, 'podPidsLimit: ' + str(expected))] != kept:
+        if staged != desired_text or [line for line in staged.splitlines() if line not in [KUBELET_MARK] + wanted] != kept:
             raise ValueError('Staged kubelet configuration differs from the reviewed change')
         if read(KUBELET_CONFIG) != config:
             raise ValueError('Kubelet configuration changed concurrently; no replacement applied')
@@ -257,41 +272,115 @@ def pod_pid_limit(read, write, command, node_exec, configz):
         command(node_exec + ['rm', '-f', '--', stage])
     try:
         command(node_exec + ['systemctl', 'restart', 'kubelet'])
-        observed = configz()
-        if observed != expected:
-            raise ValueError('The kubelet reports podPidsLimit ' + str(observed))
+        if not applied():
+            raise ValueError('The kubelet does not report the configured values')
     except (ValueError, subprocess.SubprocessError, OSError):
         write(stage, config)
         command(node_exec + ['mv', '-T', stage, KUBELET_CONFIG])
         command(node_exec + ['systemctl', 'restart', 'kubelet'])
-        raise ValueError('The kubelet did not apply podPidsLimit; its prior configuration was restored')
-    return expected
+        raise ValueError('The kubelet did not apply ' + ', '.join(sorted(desired)) + '; its prior configuration was restored')
+    return dict(desired)
 
 
-def kubelet_configz(kubectl, node, command, attempts=30, sleep=time.sleep):
-    """podPidsLimit as the running kubelet reports it through /configz."""
+def kubelet_config(kubectl, node, command, attempts=30, sleep=time.sleep):
+    """The running kubelet's configuration as it reports it through /configz."""
     for _ in range(attempts):
         try:
             raw = command(kubectl + ['get', '--raw', '/api/v1/nodes/' + node + '/proxy/configz'])
-            return json.loads(raw).get('kubeletconfig', {}).get('podPidsLimit')
+            return json.loads(raw).get('kubeletconfig', {})
         except (subprocess.SubprocessError, ValueError, OSError):
             sleep(2)
     raise ValueError('The kubelet /configz did not answer after the restart')
 
 
+def kubelet_configz(kubectl, node, command, attempts=30, sleep=time.sleep):
+    """podPidsLimit as the running kubelet reports it through /configz."""
+    return kubelet_config(kubectl, node, command, attempts, sleep).get('podPidsLimit')
+
+
+def runtime_class(cluster_uid, workers):
+    """The reviewed RuntimeClass; with workers it schedules sandboxed pods
+    only onto nodes this installer prepared, tolerating their taint."""
+    import kind_nodes
+    value = json.loads((MANIFESTS / 'runtimeclass.json').read_text())
+    value['metadata']['annotations'] = {'ai-sdlc.io/cluster-uid': cluster_uid}
+    if workers:
+        value['scheduling'] = kind_nodes.runtime_class_scheduling()
+    return value
+
+
 def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
-    """Bootstrap only the single node created by the committed kind manifest."""
+    """Bootstrap every node that runs sandboxed pods: the single node of the
+    committed kind manifest, or each worker of a cluster created with
+    --workers (the control-plane then runs no sandboxed pod)."""
+    import kind_nodes
     import offline_probe
 
     def command(args, **kwargs):
         return subprocess.run([str(v) for v in args], text=True, check=True,
                               capture_output=True, timeout=90, **kwargs).stdout
 
+    def run(args, **kwargs):
+        return subprocess.run([str(v) for v in args], text=True, check=kwargs.pop('check', True), **kwargs)
+
     env = dict(os.environ, KIND_EXPERIMENTAL_PROVIDER=provider)
-    nodes = command([kind, 'get', 'nodes', '--name', cluster], env=env).splitlines()
-    if nodes != [cluster + '-control-plane']:
-        raise ValueError('Offline runtime supports only the committed single-node kind topology')
-    node = nodes[0]
+    topology = kind_nodes.topology(run, provider, kind, cluster, env)
+    targets = kind_nodes.sandbox_nodes(topology)
+    lock = load_lock()
+    fragment = (MANIFESTS / 'containerd.toml').read_text()
+    shim = (MANIFESTS / 'runsc.toml').read_text()
+    # Every node is checked before any node or the API is changed.
+    plans = [prepare_node(provider, node, cluster, cluster_uid, lock, fragment, shim, command) for node in targets]
+    desired_class = runtime_class(cluster_uid, topology['workers'])
+    existing_class = command(kubectl + ['get', 'runtimeclass', HANDLER, '--ignore-not-found', '-o', 'json'])
+    if existing_class:
+        resource = json.loads(existing_class)
+        if (resource['metadata'].get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
+                or resource.get('handler') != HANDLER):
+            raise ValueError('Refusing to adopt a foreign RuntimeClass')
+        if resource.get('scheduling') != desired_class.get('scheduling'):
+            raise ValueError('The existing RuntimeClass schedules differently from this cluster topology')
+    staged = None
+    try:
+        if any(plan['marker'] is None for plan in plans):
+            downloaded = archive(cache, lock)
+            staged = tempfile.TemporaryDirectory(prefix='ai-sdlc-gvisor-')
+            root = Path(staged.name) / 'runtime'
+            root.mkdir()
+            extract_verified(downloaded, root, lock)
+            (root / 'ai-sdlc-owner.json').write_text(plans[0]['owner'])
+        nodes = {}
+        for plan in plans:
+            nodes[plan['node']] = install_node(kubectl, provider, plan, lock, fragment, shim, command,
+                                               None if staged is None else Path(staged.name) / 'runtime',
+                                               worker=bool(topology['workers']))
+    finally:
+        if staged is not None:
+            staged.cleanup()
+    for node in targets:
+        command(kubectl + ['label', 'node', node, '--overwrite', kind_nodes.READY_LABEL + '=' + kind_nodes.READY])
+    if not existing_class:
+        command(kubectl + ['create', '-f', '-'], input=json.dumps(desired_class))
+    result = offline_probe.verify(kubectl, image, HANDLER)
+    per_node = offline_probe.verify_nodes(kubectl, image, HANDLER, targets) if topology['workers'] else None
+    observed_class = json.loads(command(kubectl + ['get', 'runtimeclass', HANDLER, '-o', 'json']))
+    first = nodes[targets[0]]
+    return {'runtimeClass': HANDLER, 'version': lock['version'], 'sourceRevision': lock['sourceRevision'],
+            'clusterUID': cluster_uid, 'probeImage': image,
+            'runtimeClassUID': observed_class['metadata']['uid'],
+            'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'archiveSHA256': lock['sha256'], 'configurationSHA256': sha256(shim.encode()),
+            'handlerConfigurationSHA256': sha256(fragment.encode()),
+            # The smallest node value; None only when every node is unlimited.
+            'network': 'none', 'scopeTasksMax': min((n['scopeTasksMax'] for n in nodes.values() if n['scopeTasksMax'] is not None), default=None),
+            'podPidsLimit': first['podPidsLimit'], 'verification': result,
+            **({'nodes': nodes, 'scheduling': observed_class.get('scheduling'), 'nodeVerification': per_node}
+               if topology['workers'] else {}),
+            'autonomousExecutionEnabled': False}
+
+
+def prepare_node(provider, node, cluster, cluster_uid, lock, fragment, shim, command):
+    """Read-only preflight of one node; refuses foreign or conflicting state."""
     label = command([provider, 'inspect', '--format', '{{index .Config.Labels "io.x-k8s.kind.cluster"}}', node]).strip()
     if label != cluster:
         raise ValueError('Kind node container ownership mismatch')
@@ -308,7 +397,6 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
     def write(path, value):
         command([provider, 'exec', '-i', node, 'tee', path], input=value)
 
-    lock = load_lock()
     owner = json.dumps({'clusterUID': cluster_uid, 'archiveSHA256': lock['sha256']}, sort_keys=True) + '\n'
     marker = read(PREFIX + '/ai-sdlc-owner.json')
     if marker is not None and marker != owner:
@@ -319,38 +407,33 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
     before = read(NODE_CONFIG)
     if before is None:
         raise ValueError('Kind containerd configuration is unavailable')
-    fragment = (MANIFESTS / 'containerd.toml').read_text()
     desired = node_configuration(before, fragment)
-    shim = (MANIFESTS / 'runsc.toml').read_text()
     existing_shim = read(SHIM_CONFIG)
     if existing_shim is not None and (marker is None or existing_shim != shim):
         raise ValueError('Conflicting offline shim configuration')
-    existing_class = command(kubectl + ['get', 'runtimeclass', HANDLER, '--ignore-not-found', '-o', 'json'])
-    if existing_class:
-        resource = json.loads(existing_class)
-        if (resource['metadata'].get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
-                or resource.get('handler') != HANDLER):
-            raise ValueError('Refusing to adopt a foreign RuntimeClass')
-    if marker is None:
-        downloaded = archive(cache, lock)
-        with tempfile.TemporaryDirectory(prefix='ai-sdlc-gvisor-') as directory:
-            root = Path(directory) / 'runtime'
-            root.mkdir()
-            extract_verified(downloaded, root, lock)
-            (root / 'ai-sdlc-owner.json').write_text(owner)
-            command(node_exec + ['mkdir', '-p', '/opt/ai-sdlc'])
-            stage = PREFIX + '-stage-' + secrets.token_hex(6)
-            try:
-                command([provider, 'cp', str(root), node + ':' + stage])
-                command(node_exec + ['mv', '-T', stage, PREFIX])
-            finally:
-                command(node_exec + ['rm', '-rf', '--', stage])
+    return {'node': node, 'exec': node_exec, 'read': read, 'write': write, 'owner': owner, 'marker': marker,
+            'before': before, 'desired': desired, 'existingShim': existing_shim}
+
+
+def install_node(kubectl, provider, plan, lock, fragment, shim, command, root, worker=False):
+    """Install the verified runtime and node limits on one prepared node."""
+    import kind_nodes
+    node, node_exec, read, write = plan['node'], plan['exec'], plan['read'], plan['write']
+    before, desired = plan['before'], plan['desired']
+    if plan['marker'] is None:
+        command(node_exec + ['mkdir', '-p', '/opt/ai-sdlc'])
+        stage = PREFIX + '-stage-' + secrets.token_hex(6)
+        try:
+            command([provider, 'cp', str(root), node + ':' + stage])
+            command(node_exec + ['mv', '-T', stage, PREFIX])
+        finally:
+            command(node_exec + ['rm', '-rf', '--', stage])
     # Reapplication verifies installed bytes instead of trusting its marker.
     for name, entry in lock['files'].items():
         found = command(node_exec + ['sha256sum', PREFIX + '/' + name]).split()[0]
         if found != entry['sha256']:
             raise ValueError('Installed offline runtime binary differs from its lock')
-    if existing_shim is None:
+    if plan['existingShim'] is None:
         write(SHIM_CONFIG, shim)
     if desired != before:
         stage = NODE_CONFIG + '.ai-sdlc-' + secrets.token_hex(6)
@@ -370,19 +453,18 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
         finally:
             command(node_exec + ['rm', '-f', '--', stage])
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
-    pods_max = pod_pid_limit(read, write, command, node_exec, lambda: kubelet_configz(kubectl, node, command))
+    policy = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())
+    settings = {'podPidsLimit': policy['podPidsLimit']}
+    limit = node_pid_limit(read)
+    if worker:
+        if limit is None:
+            raise ValueError('A worker node needs a pid limit; re-run the installer to set it')
+        # The scheduler then never places more pods on a worker than its pid
+        # limit holds, wherever node-local volumes draw them.
+        settings['maxPods'] = kind_nodes.max_pods(limit)
+    applied = kubelet_settings(read, write, command, node_exec, lambda: kubelet_config(kubectl, node, command),
+                               settings, {'podPidsLimit': set(policy.get('previous', []))})
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
     tasks_max = sandbox_task_limit(read, write, command, node_exec)
-    runtime_class = json.loads((MANIFESTS / 'runtimeclass.json').read_text())
-    runtime_class['metadata']['annotations'] = {'ai-sdlc.io/cluster-uid': cluster_uid}
-    if not existing_class:
-        command(kubectl + ['create', '-f', '-'], input=json.dumps(runtime_class))
-    result = offline_probe.verify(kubectl, image, HANDLER)
-    observed_class = json.loads(command(kubectl + ['get', 'runtimeclass', HANDLER, '-o', 'json']))
-    return {'runtimeClass': HANDLER, 'version': lock['version'], 'sourceRevision': lock['sourceRevision'],
-            'clusterUID': cluster_uid, 'probeImage': image,
-            'runtimeClassUID': observed_class['metadata']['uid'],
-            'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'archiveSHA256': lock['sha256'], 'configurationSHA256': sha256(shim.encode()),
-            'handlerConfigurationSHA256': sha256(fragment.encode()),
-            'network': 'none', 'scopeTasksMax': tasks_max, 'podPidsLimit': pods_max, 'verification': result, 'autonomousExecutionEnabled': False}
+    return {'scopeTasksMax': tasks_max, 'podPidsLimit': applied['podPidsLimit'], 'nodePidsLimit': limit,
+            **({'maxPods': applied['maxPods']} if worker else {})}

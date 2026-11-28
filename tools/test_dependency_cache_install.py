@@ -155,6 +155,10 @@ class FakeCluster:
                 return self.reply({'items': list(self.volumes.values())})
             if command[1] == 'pv':
                 return self.reply(copy.deepcopy(self.volumes.get(command[2])))
+            if command[1] == 'runtimeclass':
+                return self.reply(copy.deepcopy(getattr(self, 'runtime_class', None)))
+            if command[1] == 'node':
+                return self.reply(copy.deepcopy(getattr(self, 'nodes', {}).get(command[2])))
             return self.reply(copy.deepcopy(self.claims.get((command[-1], command[2]))))
         self.mutations += 1
         fail = self.mutations == self.fail_at
@@ -234,6 +238,25 @@ class SealTests(unittest.TestCase):
         self.assertTrue(all(c[0] == 'get' for c in self.fake.calls))
         with self.assertRaises(ValueError):
             deps.prepare(cluster, GO_VECTOR)
+
+    def test_a_node_local_cache_must_be_on_a_sandbox_node(self):
+        affinity = {'required': {'nodeSelectorTerms': [{'matchExpressions': [
+            {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': ['c-control-plane']}]}]}}
+        cluster = self.cluster()
+        self.fake.volumes['pv-1']['spec']['nodeAffinity'] = affinity
+        self.fake.runtime_class = {'scheduling': {'nodeSelector': {'ai-sdlc.io/offline-runtime': 'ready'}}}
+        self.fake.nodes = {'c-control-plane': {'metadata': {'labels': {}}},
+                           'c-worker': {'metadata': {'labels': {'ai-sdlc.io/offline-runtime': 'ready'}}}}
+        deps.prepare(cluster, GO_VECTOR)
+        with self.assertRaisesRegex(RuntimeError, 'c-control-plane, where sandboxed verification pods cannot run'):
+            deps.seal(cluster, GO_VECTOR, sleep=lambda _: None)
+        self.assertEqual(self.fake.volumes['pv-1']['spec']['persistentVolumeReclaimPolicy'], 'Delete', 'refused before any change')
+        affinity['required']['nodeSelectorTerms'][0]['matchExpressions'][0]['values'] = ['c-worker']
+        self.assertEqual(deps.seal(cluster, GO_VECTOR, sleep=lambda _: None), 'deps-' + GO_VECTOR)
+        self.assert_sealed('Delete')
+        self.assertEqual(deps.volume_nodes({'spec': {}}), None)
+        with self.assertRaisesRegex(RuntimeError, 'cannot check'):
+            deps.volume_nodes({'spec': {'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchFields': [{}]}]}}}})
 
     def test_an_original_retain_policy_is_kept(self):
         cluster = self.cluster('Retain')
