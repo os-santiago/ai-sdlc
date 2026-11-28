@@ -22,7 +22,7 @@ jobs:
       - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           languages: javascript
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
   go:
     name: codeql (go)
     runs-on: ubuntu-latest
@@ -44,7 +44,7 @@ jobs:
       - name: Build Go runtime for extraction
         working-directory: runtime/k8s
         run: go build ./...
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
         with:
           category: /language:go
   python:
@@ -61,6 +61,6 @@ jobs:
         with:
           languages: python
           build-mode: none
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
         with:
           category: /language:python
