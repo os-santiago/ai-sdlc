@@ -164,6 +164,26 @@ class ApplyTests(unittest.TestCase):
         explicit = FakeNode(pids=12288)
         self.assertEqual(kind_nodes.apply(explicit.run, 'podman', 'c', 'c-control-plane', self.WANT)['pidsLimit'], 8192)
 
+    def test_a_stored_limit_above_the_target_needs_headroom(self):
+        # Live cgroup already at the target; only the stored value is above it.
+        busy = FakeNode(pids=16384, live='8192', used=7500)
+        with self.assertRaisesRegex(ValueError, 'refusing to lower'):
+            kind_nodes.apply(busy.run, 'podman', 'c', 'c-control-plane', self.WANT)
+        self.assertEqual(busy.updates(), [])
+
+    def test_the_effective_limit_is_the_smallest_node_target(self):
+        limits = {'c-control-plane': 16384, 'c-worker': 8192, 'c-worker2': 12288}
+
+        def run(args, **_kwargs):
+            if args[1:3] == ['get', 'nodes']:
+                return SimpleNamespace(stdout='\n'.join(limits) + '\n')
+            return SimpleNamespace(stdout=json.dumps({'PidsLimit': limits[args[-1]]}) + '|' + json.dumps(
+                {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': 'worker'}))
+        default = dict(self.WANT, pidsLimitExplicit=False)
+        self.assertEqual(kind_nodes.effective_limit(run, 'podman', 'c', 'kind', {}, default), 8192)
+        self.assertEqual(kind_nodes.effective_limit(run, 'podman', 'c', 'kind', {}, default, ['c-control-plane', 'c-worker2']), 12288)
+        self.assertEqual(kind_nodes.effective_limit(run, 'podman', 'c', 'kind', {}, dict(self.WANT, pidsLimit=4096)), 4096)
+
     def test_live_drift_above_the_target_needs_headroom(self):
         # Stored configuration already at the target, live cgroup unlimited.
         busy = FakeNode(pids=8192, live='max', used=7500)
@@ -347,7 +367,8 @@ class InstallerWiringTests(unittest.TestCase):
     class Reached(Exception):
         pass
 
-    def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192):
+    def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192, existing=True,
+              calls=None):
         import os
         import subprocess
         import offline_runtime
@@ -355,8 +376,10 @@ class InstallerWiringTests(unittest.TestCase):
 
         def run(command, **kwargs):
             argv_ = [str(v) for v in command]
+            if calls is not None:
+                calls.append(argv_)
             if argv_[:3] == ['kind', 'get', 'clusters']:
-                return subprocess.CompletedProcess(argv_, 0, 'c\n')
+                return subprocess.CompletedProcess(argv_, 0, 'c\n' if existing else '')
             if argv_[:3] == ['kind', 'export', 'kubeconfig']:
                 Path(argv_[-1]).write_text('fixture only\n')
             if 'kube-system' in argv_ and 'jsonpath={.metadata.uid}' in argv_:
@@ -400,6 +423,13 @@ class InstallerWiringTests(unittest.TestCase):
     def test_sandbox_reconciles_the_nodes_before_the_offline_runtime(self):
         with self.assertRaises(self.Reached):
             self.drive(['sandbox'])
+
+    def test_a_new_cluster_is_refused_before_it_is_created(self):
+        calls = []
+        with self.assertRaisesRegex(ValueError, 'cannot hold'):
+            self.drive(['local', '--node-pids-limit', '2048', '--tekton-ci', '--tekton-ci-candidate-pods', '2'],
+                       existing=False, calls=calls)
+        self.assertFalse(any(c[:3] == ['kind', 'create', 'cluster'] for c in calls), 'refused before kind create')
 
     def test_installed_quotas_count_when_tekton_ci_is_omitted(self):
         # 1100 + 6 x 768 = 5708 > 4096; the requested quotas alone (none) would fit.
