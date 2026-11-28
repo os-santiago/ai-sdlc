@@ -945,6 +945,42 @@ class RunToolTests(unittest.TestCase):
                             runner.sandbox_ready('c', 1024, run=run)
                 self.assertEqual(run.call_args.args[0][:3], ['podman', 'exec', 'c-control-plane'])
 
+    def test_every_ready_node_must_have_the_raised_task_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory, 'ai-sdlc/c')
+            state.mkdir(parents=True)
+            state.joinpath('ownership.json').write_text('{"provider": "podman"}')
+            with patch.dict('os.environ', {'XDG_STATE_HOME': directory}):
+                def run(args, **_kwargs):
+                    if args[:2] == ['kubectl', 'get']:
+                        return Mock(stdout='node/c-worker\nnode/c-worker2\n')
+                    return Mock(stdout=shown[args[2]] + '\n')
+                shown = {'c-worker': '3072', 'c-worker2': '3072'}
+                runner.sandbox_ready('c', 768, run=run, kubectl=['kubectl'])
+                shown['c-worker2'] = '307'
+                with self.assertRaisesRegex(ValueError, 'c-worker2 still caps'):
+                    runner.sandbox_ready('c', 768, run=run, kubectl=['kubectl'])
+                foreign = Mock(return_value=Mock(stdout='node/other-worker\n'))
+                with self.assertRaisesRegex(ValueError, 'not a node of this kind cluster'):
+                    runner.sandbox_ready('c', 768, run=foreign, kubectl=['kubectl'])
+                # An install from before the label: the single node.
+                old = Mock(return_value=Mock(stdout='3072\n'))
+                old.side_effect = lambda args, **_k: Mock(stdout='' if args[0] == 'kubectl' else '3072\n')
+                runner.sandbox_ready('c', 768, run=old, kubectl=['kubectl'])
+                self.assertEqual(old.call_args.args[0][:3], ['podman', 'exec', 'c-control-plane'])
+
+    def test_admission_admits_only_the_exact_ci_worker_placement(self):
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}", rules)
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', "
+                      "'value': 'true', 'effect': 'NoSchedule'}]", rules)
+        import kind_nodes
+        self.assertEqual(kind_nodes.tekton_pod_template(), {'nodeSelector': {'ai-sdlc.io/ci-node': 'true'}, 'tolerations': [
+            {'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', 'value': 'true', 'effect': 'NoSchedule'}]},
+            'the installer template and the admitted values must stay identical')
+        # Per-task overrides still allow no placement fields.
+        self.assertIn("s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName'])", rules)
+
     def test_admission_requires_the_sandbox_for_build_test(self):
         rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
         self.assertIn("s.pipelineTaskName == 'build-test'", rules)

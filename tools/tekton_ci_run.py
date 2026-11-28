@@ -291,21 +291,32 @@ def connect(cluster):
     return kubectl
 
 
-def sandbox_ready(cluster, minimum, run=run):
-    """Evidence that ./install.sh sandbox raised the node's per-scope task limit.
+def sandbox_ready(cluster, minimum, run=run, kubectl=None):
+    """Evidence that ./install.sh sandbox raised each node's per-scope task limit.
 
     A RuntimeClass from an earlier install leaves scopes at 307 tasks, where
-    sandboxed Tekton pods die; the node's systemd default must be at least the
-    reviewed value (or unlimited).
+    sandboxed Tekton pods die; the systemd default of every node that runs
+    sandboxed pods (labelled ready by the installer; the single node of an
+    older install without the label) must be at least the pod limit (or
+    unlimited).
     """
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / cluster
     provider = json.loads((state / 'ownership.json').read_text()).get('provider')
     if provider not in ('docker', 'podman'):
         raise ValueError('Unknown kind provider in the ownership record')
-    shown = run([provider, 'exec', cluster + '-control-plane', 'systemctl', 'show', '-p', 'DefaultTasksMax', '--value'],
-                capture_output=True, timeout=60).stdout.strip()
-    if shown != 'infinity' and (not shown.isdigit() or int(shown) < minimum):
-        raise ValueError('The kind node still caps container scopes at ' + shown + ' tasks; re-run ./install.sh sandbox')
+    nodes = []
+    if kubectl is not None:
+        listed = run(kubectl + ['get', 'nodes', '-l', 'ai-sdlc.io/offline-runtime=ready', '-o', 'name'],
+                     capture_output=True, timeout=60).stdout.split()
+        nodes = [name.removeprefix('node/') for name in listed]
+        if any(not re.fullmatch(re.escape(cluster) + r'-(control-plane|worker([2-9][0-9]*)?)', n) for n in nodes):
+            raise ValueError('A node labelled ready is not a node of this kind cluster')
+    for node in nodes or [cluster + '-control-plane']:
+        shown = run([provider, 'exec', node, 'systemctl', 'show', '-p', 'DefaultTasksMax', '--value'],
+                    capture_output=True, timeout=60).stdout.strip()
+        if shown != 'infinity' and (not shown.isdigit() or int(shown) < minimum):
+            raise ValueError('The kind node ' + node + ' still caps container scopes at ' + shown
+                             + ' tasks; re-run ./install.sh sandbox')
 
 
 def require_runtime_class(kubectl, name):
@@ -393,7 +404,7 @@ def main(argv=None):
         require_runtime_class(kubectl, args.runtime_class)
         # The scope limit must reach the pod limit, so the pod bound is what holds.
         pods = json.loads((ROOT / 'runtime/k8s/deploy/local/offline-runtime/kubelet-pods.json').read_text())
-        sandbox_ready(args.cluster, pods['podPidsLimit'])
+        sandbox_ready(args.cluster, pods['podPidsLimit'], kubectl=kubectl)
     result = run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered), capture_output=True, check=False)
     if result.returncode != 0:
         # The rendered run carries no credential; show the API's reason (for

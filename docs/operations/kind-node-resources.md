@@ -10,8 +10,8 @@ it creates the cluster and reconciles them on every later run.
 | Option | Default | Effect |
 | --- | --- | --- |
 | `--node-pids-limit N` | 8192, or a quarter of the host's `kernel.pid_max` when that is smaller | Pid limit of every node container (2,048 to half of the host's `pid_max`). |
-| `--node-memory SIZE` | off | Optional memory cap of every node container, for example `12g` or `6144m` (at least `2g`). Memory plus swap is set to the same value, so the node cannot swap past it. |
-| `--node-cpus N` | off | Optional CPU cap of every node container, for example `8` or `6.5` (at most the host CPU count). |
+| `--node-memory SIZE` | off | Optional memory cap of every node that runs sandboxed pods (the single node, or each worker; a control-plane with workers stays uncapped), for example `12g` or `6144m` (at least `2g`). Memory plus swap is set to the same value, so the node cannot swap past it. |
+| `--node-cpus N` | off | Optional CPU cap of every node that runs sandboxed pods (the single node, or each worker), for example `8` or `6.5` (at most the host CPU count). |
 | `--tekton-ci-candidate-pods N` | 1 | Tekton CI candidate-code (`build-test`) pods that may run at once (1 to 32). Requires `--tekton-ci`. |
 | `--tekton-ci-fetch-pods N` | 1 | Tekton CI fetch pods that may run at once (1 to 32). Requires `--tekton-ci`. |
 
@@ -85,14 +85,133 @@ for 2,048:
   768 = 4,940, so the candidate quota can rise to 5 with one fetch pod. At
   podman's 2,048 the verification profile is refused, which is issue #859.
 
-The installer checks this budget against both the quotas already in the
-cluster and the requested ones, so it holds before, during and after a
-reconciliation, and when a later run omits `--tekton-ci` (which keeps Tekton
-and its quotas). `./install.sh sandbox` counts the verification run too.
-Because the installed quotas count, lowering both the quotas and the limit
-takes two runs: first the quotas, then the limit.
+The installer checks this budget against the smallest limit the nodes will
+have. When a run lowers a node's limit, it counts the larger of the installed
+and the requested quotas, because the installed ones stay until Tekton CI is
+reapplied (and forever if `--tekton-ci` is omitted); lowering both the quotas
+and the limit therefore takes two runs, quotas first. A run that keeps or
+raises the limit counts the requested quotas, or the installed ones when it
+omits `--tekton-ci`. `./install.sh sandbox` counts the verification run too.
 
 No single pod can exceed its `podPidsLimit` and no scope its
 `DefaultTasksMax`, both well below the node limit, so one runaway pod cannot
 exhaust the node, and since the budget counts every admitted pod at that
 bound, all of them together cannot either.
+
+## Worker nodes
+
+`./install.sh local --workers N` (0 to 4, default 0) creates the kind cluster
+with N worker nodes next to the control-plane. Zero keeps the committed
+single-node `kind.yaml` exactly as before. kind cannot add or remove nodes
+later: a reinstall keeps the cluster's topology, refuses a different
+`--workers`, and re-derives everything below from the nodes it finds.
+
+All nodes share the host kernel, so workers do not add CPU or memory. They add
+separate pid limits and cgroups, and they keep heavy sandboxed work away from
+the control-plane. Evidence from the single-node cluster: an independent
+review failed its 3-second authority fence (database and API reads) while a
+three-pod verification with six PostgreSQL sidecars ran on the same node.
+
+**Placement.**
+
+- Workers are created with the label `ai-sdlc.io/node-role=sandbox` and the
+  taint `ai-sdlc.io/sandbox=true:NoSchedule`, so ordinary pods stay off them.
+- The installer removes kind's control-plane taint, which kind keeps once a
+  cluster has workers. The runtime, its database, the API server and the
+  network probes stay on the control-plane.
+- `./install.sh sandbox` (and `local` with the candidate or verification
+  profile) installs the offline runtime on every worker: runsc, the containerd
+  handler, the systemd drop-in and the kubelet limits. It labels each prepared
+  worker `ai-sdlc.io/offline-runtime=ready`. The control-plane gets none of
+  these.
+- The `ai-sdlc-offline` RuntimeClass gets `scheduling.nodeSelector` on that
+  label plus a toleration for the taint. Every sandboxed pod (executors,
+  reviewers, verification runs, Tekton build-test) therefore lands only on
+  prepared workers, without chart changes.
+- Tekton's default pod template (`config-defaults`) selects the one **CI
+  worker** (label `ai-sdlc.io/ci-node=true`) and tolerates the taint. A
+  build-test pod mounts both the run's source claim, bound by its checkout
+  pod, and the repository's Maven cache. Both are node-local ReadWriteOnce
+  volumes, so on different workers build-test could never schedule. Every
+  Tekton pod (fetch and the sandboxed build-test) therefore runs on the CI
+  worker, which is prepared like every worker. This covers runs from
+  `tools/tekton_ci_run.py` and runs the runtime creates. The CI worker is the
+  worker that already holds the CI caches, or the first worker when none is
+  bound. A labelled CI worker keeps the label, and the installer refuses to
+  move it while a PipelineRun is in progress. Caches bound on several nodes
+  are refused. The CI admission policy admits exactly this nodeSelector and
+  toleration in a run's template.
+- Executors and reviewers are not pinned. The scheduler may place them on the
+  CI worker too, where they compete with CI and verification runs for that
+  worker's CPU, memory and `maxPods` slots.
+- The installer verifies the runtime with the usual conformance probe and also
+  runs one sandboxed pod pinned to each worker (`nodeVerification` in the
+  report). `local` also runs the network-policy conformance on the workers
+  (`workerNetworkPolicyVerification`).
+
+**Measured isolation.** The test cluster had one control-plane and two
+workers on a 16-CPU host. Three pods, each running four busy threads with
+allocation churn, ran for 150 sequential API reads (configmaps, pods and nodes
+through `kubectl proxy`) per placement:
+
+| Load placement | Workers uncapped: p50 / p95 / max (ms) | Workers at `--node-cpus 4`: p50 / p95 / max (ms) |
+| --- | --- | --- |
+| none (idle) | 3.0 / 4.8 / 10.3 | 3.1 / 4.6 / 9.2 |
+| workers (gVisor, through the RuntimeClass) | 4.9 / 8.1 / 11.7 | 3.0 / 5.8 / 8.2 |
+| control-plane (what a single node does) | 5.8 / 11.3 / 14.3 | 7.1 / 12.7 / 20.0 |
+
+All nodes share the host CPUs, so uncapped workers still compete with the
+control-plane. With CPU caps on the workers, API latency under worker load
+stays at the idle level. Use `--node-cpus` (and `--node-memory`) with
+`--workers`; the control-plane stays uncapped.
+
+**Images.** Every node pulls the pinned images from their registries by
+digest when a pod first needs them. The install path loads no image archive
+into a node, so a new worker needs no extra step.
+
+**Node-local volumes.** local-path volumes are ReadWriteOnce and bound to the
+node where their first pod ran, through the PersistentVolume's node affinity.
+
+- The Tekton Maven caches and each run's source claim bind to the CI worker,
+  and every later pod that mounts them is scheduled there.
+- The sealed dependency cache `deps-<key>` keeps the node of its Tekton fill,
+  the CI worker. The three concurrent runs of a verification (baseline, cross,
+  candidate) share that claim, so all three run on the CI worker too.
+- `tools/dependency_cache_install.py seal` refuses a volume bound to a node the
+  RuntimeClass cannot schedule onto.
+- Use ReadWriteMany storage if runs must spread across workers.
+
+**Pid budget and quotas.** On every `local` and `sandbox` run, each worker's
+kubelet `maxPods` is set to what its pid limit holds: `(limit - 400) // 768 -
+1` pods at the 768 `podPidsLimit`, plus kindnet, kube-proxy and one slot for
+short helper pods. At 8,192 that is 9 pods and `maxPods: 12`. It follows the
+limit when the limit changes, and the scheduler enforces it, so even pods that
+node-local volumes draw to one worker can never exceed that worker's pid
+limit; extra pods wait.
+
+The CI pods and the verification runs that use the sealed caches all land on
+the CI worker, so one verification run (3 pods) plus the Tekton CI candidate
+and fetch quotas must fit that one worker's capacity. The quotas keep their
+defaults of one each and do not grow with the worker count; raise the CI
+worker's capacity with `--node-pids-limit` (9 pods at 8,192, 20 at 16,384).
+More workers add room for the other sandboxed pods (executors and reviewers),
+separate pid and cgroup limits, and isolation of the control-plane, which
+keeps its own baseline and runs no sandboxed pod.
+
+**Host services.** Pods reach the host through SNAT to their node's address,
+so a host service that allowlists client addresses (the local model service's
+`allowedClients`) must allow every node. The installer prints the addresses
+(`Kind node addresses to allow ...`) and records them under
+`nodeResources.nodeAddresses`. It never edits host configuration.
+
+**Still single-node.** These tools assume `<cluster>-control-plane` and are
+not on the `local` or `sandbox` path. Run them only on single-node clusters:
+
+- The Konflux and build paths: `bootstrap_prepare.py`,
+  `build_foundation_install.py`, `build_runtime_install.py`,
+  `registry_node_install.py` and `verify_konflux_*`. `--workers` is refused
+  with the Konflux platform.
+- The browser runtime and verifier fixtures: `browser_runtime.py`,
+  `browser_platform_install.py` and `verify_browser_*`.
+- The disposable verification fixtures `verify_*`, which require a dedicated
+  single-node cluster.

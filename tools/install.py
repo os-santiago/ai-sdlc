@@ -515,9 +515,10 @@ def _main(argv, stack):
     parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
     parser.add_argument('--tekton-ci-candidate-pods', type=int, help='Tekton CI candidate-code (build-test) pods that may run at once (1-32, default 1); checked against the node pid budget')
     parser.add_argument('--tekton-ci-fetch-pods', type=int, help='Tekton CI fetch pods that may run at once (1-32, default 1); checked against the node pid budget')
+    parser.add_argument('--workers', type=int, help='Worker nodes of a new kind cluster (0-4, default 0: one node as before); sandboxed and CI pods then run only on the workers (docs/operations/kind-node-resources.md)')
     parser.add_argument('--node-pids-limit', type=int, help='Pid limit of each kind node container (default 8192, or a quarter of the host pid_max or threads-max when smaller; without the option a larger limit already set is kept); kind only (docs/operations/kind-node-resources.md)')
-    parser.add_argument('--node-memory', help='Optional memory cap of each kind node container, for example 12g; off by default; kind only')
-    parser.add_argument('--node-cpus', help='Optional CPU cap of each kind node container, for example 8 or 6.5; off by default; kind only')
+    parser.add_argument('--node-memory', help='Optional memory cap of each kind node that runs sandboxed pods (the single node, or each worker), for example 12g; off by default; kind only')
+    parser.add_argument('--node-cpus', help='Optional CPU cap of each kind node that runs sandboxed pods (the single node, or each worker), for example 8 or 6.5; off by default; kind only')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -554,16 +555,37 @@ def _main(argv, stack):
     openshift_install.validate_options(args)
     tekton_ci_install.validate_options(args)
     node_resources = kind_nodes.validate_options(args)
+    kind_nodes.validate_workers(args.workers)
+    if args.workers is not None and (args.platform != 'kind' or args.command not in ('plan', 'local', 'sandbox')):
+        raise ValueError('--workers requires plan, local or sandbox on the kind platform')
+
+    def capacity(workers, installed=None, sandboxed=None, limit=None, lowering=False, running=None):
+        # The nodes must hold their baseline, one verification run when
+        # sandboxed execution is installed, and every CI pod the quotas admit.
+        # Which quotas: when this run lowers a node limit, both the installed
+        # and the requested ones (the installed ones stay until Tekton CI is
+        # reapplied, or forever if --tekton-ci is omitted); otherwise the
+        # requested ones, or the installed ones when --tekton-ci is omitted.
+        quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods,
+                                              workers) if args.tekton_ci else None
+        installed = installed or {'candidate': 0, 'fetch': 0}
+        running = running or {}
+        if lowering or quotas is None:
+            counted = {k: max(installed[k], (quotas or {}).get(k, 0)) for k in ('candidate', 'fetch')}
+        else:
+            # Pods already running stay even when the quota is lowered.
+            counted = {k: max(running.get(k, 0), quotas[k]) for k in ('candidate', 'fetch')}
+        budget = kind_nodes.pid_budget(limit or node_resources['pidsLimit'],
+                                       sandbox=args.profile in ('candidate', 'verification') if sandboxed is None else sandboxed,
+                                       candidate_pods=counted['candidate'], fetch_pods=counted['fetch'], workers=workers)
+        return quotas, budget
+    tekton_quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods,
+                                                 args.workers or 0) if args.tekton_ci else None
     node_budget = None
-    tekton_quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods) if args.tekton_ci else None
     if node_resources is not None and args.command == 'plan':
-        # The node must hold its baseline, one verification run when sandboxed
-        # execution is installed, and every CI pod the quotas admit. local
-        # checks before creating a cluster, and a reinstall in reconcile_nodes
-        # against the nodes' effective limit and the installed quotas.
-        node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
-                                            candidate_pods=(tekton_quotas or {}).get('candidate', 0),
-                                            fetch_pods=(tekton_quotas or {}).get('fetch', 0))
+        # local checks before creating a cluster, and a reinstall checks
+        # against the cluster's actual topology and installed quotas.
+        tekton_quotas, node_budget = capacity(args.workers or 0)
     if args.runtime_class is not None:
         import candidate_install
         candidate_install.validate_runtime_class(args.runtime_class)
@@ -705,7 +727,9 @@ def _main(argv, stack):
                           # Only with the option: default output is unchanged.
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
                           **({'tektonCI': dict(tekton_plan, podQuotas=tekton_quotas)} if tekton_plan else {}),
-                          **({'nodeResources': dict(node_resources, pidBudget=node_budget)} if node_resources else {}),
+                          **({'nodeResources': dict(node_resources, pidBudget=node_budget,
+                                                    **({'workers': args.workers} if args.workers else {}))}
+                             if node_resources else {}),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -750,11 +774,14 @@ def _main(argv, stack):
         created = args.cluster not in clusters
         if created and node_resources is not None and args.command == 'local':
             # Refuse an impossible budget before creating anything.
-            node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
-                                                candidate_pods=(tekton_quotas or {}).get('candidate', 0),
-                                                fetch_pods=(tekton_quotas or {}).get('fetch', 0))
+            tekton_quotas, node_budget = capacity(args.workers or 0)
         if created:
-            run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
+            config = LOCAL / 'kind.yaml'
+            if args.workers:
+                # kind.yaml plus the workers; written beside the kubeconfig.
+                config = state / 'kind-cluster.yaml'
+                config.write_text(kind_nodes.cluster_config(args.workers))
+            run([kind, 'create', 'cluster', '--name', args.cluster, '--config', config,
                  '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
         run([kind, 'export', 'kubeconfig', '--name', args.cluster, '--kubeconfig', kubeconfig], env=env)
         kubeconfig.chmod(0o600)
@@ -769,28 +796,56 @@ def _main(argv, stack):
         else:
             check_ownership(marker, args.cluster, provider, cluster_uid)
 
+    nodes = None
+
     def reconcile_nodes():
-        nonlocal node_budget
+        nonlocal nodes, tekton_quotas, node_budget
+        # kind cannot add or remove nodes: a reinstall keeps its topology.
+        nodes = kind_nodes.topology(run, provider, kind, args.cluster, env)
+        if args.workers is not None and len(nodes['workers']) != args.workers:
+            raise ValueError('The cluster has %d workers; kind cannot change that, so use another --cluster'
+                             % len(nodes['workers']))
         # The budget covers both the quotas in the cluster and any requested
         # change, so it holds before, during and after this reconciliation,
         # and whether or not this run reapplies Tekton CI. Sandboxed pods are
         # counted when this run installs the offline runtime or it exists.
         installed = tekton_ci_install.installed_pod_quotas(run, kubectl)
-        requested = tekton_quotas or {}
         sandboxed = (args.command == 'sandbox' or args.profile in ('candidate', 'verification') or bool(run(
             kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '--ignore-not-found', '-o', 'name'],
             capture_output=True).stdout.strip()))
         # A default keeps a larger limit already on a node: budget against
         # the smallest limit the nodes will actually have.
-        limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources)
-        node_budget = kind_nodes.pid_budget(limit, sandbox=sandboxed,
-                                            candidate_pods=max(installed['candidate'], requested.get('candidate', 0)),
-                                            fetch_pods=max(installed['fetch'], requested.get('fetch', 0)))
+        names = [nodes['controlPlane']] + nodes['workers']
+        limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources, names)
+        lowering = kind_nodes.lowers_limit(run, provider, names, node_resources)
+        running = tekton_ci_install.installed_pod_quotas(run, kubectl, used_only=True)
+        quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed, limit, lowering, running)
+        if args.command == 'local':
+            tekton_quotas = quotas
+        for worker in nodes['workers']:
+            current = kind_nodes.inspect(run, provider, worker)['pidsLimit']
+            target = kind_nodes.target_limit(current, node_resources)
+            if current is None or target < current:
+                kind_nodes.admitted_pods_fit(run, kubectl, worker, target)
         # Set on creation and reconciled on every later install: podman's
         # default node pid limit (2048) is too small (#859).
-        report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources)
+        report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources, nodes)
+        kind_nodes.schedule(run, kubectl, nodes, kind_nodes.ci_worker(run, kubectl, nodes))
+        if nodes['workers']:
+            import offline_runtime
+            # The scheduler's per-worker pod cap follows each worker's limit
+            # on every install, not only after ./install.sh sandbox.
+            limits = {r['node']: r['pidsLimit'] for r in report}
+            for worker in nodes['workers']:
+                offline_runtime.reconcile_max_pods(kubectl, provider, args.cluster, worker, limits[worker])
+        addresses = kind_nodes.node_addresses(run, provider, [nodes['controlPlane']] + nodes['workers'],
+                                              required=bool(nodes['workers']))
         print(json.dumps({'nodeResources': report}), file=sys.stderr)
-        return report
+        # Pods leave through SNAT to their node's address; a host service that
+        # allowlists clients (the local model service) must allow each one.
+        print('Kind node addresses to allow in host services that allowlist clients: '
+              + ', '.join(str(addresses[n]) + ' (' + n + ')' for n in sorted(addresses)), file=sys.stderr)
+        return {'nodes': report, 'addresses': addresses}
     node_report = None
     if args.command == 'local' and execution_values is not None:
         candidate_install.require_runtime_class(kubectl, args.runtime_class)
@@ -934,11 +989,18 @@ def _main(argv, stack):
         remove_console_credential(kubectl, cluster_uid)
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
+    worker_network = None
+    if nodes and nodes['workers']:
+        # The same conformance on the workers, where sandboxed pods run.
+        worker_network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'],
+                                              placement={'nodeSelector': {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX},
+                                                         'tolerations': [kind_nodes.toleration()]})
     # After the runtime is ready: a Tekton failure leaves the runtime intact
     # and the owned Tekton state in place for reapplication.
     tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout,
                                           args.tekton_ci_repository or [args.repository.lower()],
-                                          tekton_quotas) if args.tekton_ci else None
+                                          tekton_quotas,
+                                          kind_nodes.tekton_pod_template() if nodes and nodes['workers'] else None) if args.tekton_ci else None
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
@@ -954,8 +1016,11 @@ def _main(argv, stack):
                           # Only with the option: default output is unchanged.
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
               'networkPolicyVerification': network,
+              **({'workerNetworkPolicyVerification': worker_network} if worker_network else {}),
               **({'tektonCI': tekton_ci} if tekton_ci else {}),
-              **({'nodeResources': {'nodes': node_report, 'pidBudget': node_budget}} if node_resources else {}),
+              **({'nodeResources': {'nodes': node_report['nodes'], 'pidBudget': node_budget,
+                                    'controlPlane': nodes['controlPlane'], 'workers': nodes['workers'],
+                                    'nodeAddresses': node_report['addresses']}} if node_report else {}),
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

@@ -87,7 +87,7 @@ its history, so removal is a deliberate operator action
 | remote resolvers (`git`, `http`, `hub`, `bundles`, `cluster`) | disabled | No run can fetch an unreviewed definition. |
 | `enable-api-fields` | `stable` | No alpha or beta behavior. |
 | `disable-creds-init` | `true` | No credential initialization; the CI carries no credentials. |
-| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster like the local kind installation. |
+| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster, or on a local kind cluster with `--workers`, where every task pod runs on the one CI worker. |
 | `send-cloudevents-for-runs` | `false` | No event sink is configured. |
 
 ## The catalog
@@ -252,7 +252,10 @@ adds a dependency fails offline with `missingDependencies: true` until the
 dependency is in the cache.
 
 On a multi-node cluster the claim needs `ReadOnlyMany`/`ReadWriteMany` storage
-or node affinity; the local kind node is single-node.
+or node affinity. On a local kind cluster with `--workers`, Tekton's default
+pod template (set by the installer) runs every task pod on the one CI worker,
+so the local-path caches and each run's source claim bind there and all of a
+run's pods (fetch and the sandboxed build-test) can mount them together. See [kind node resources](kind-node-resources.md#worker-nodes).
 
 ### Sandbox
 
