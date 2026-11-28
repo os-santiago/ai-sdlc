@@ -87,7 +87,7 @@ its history, so removal is a deliberate operator action
 | remote resolvers (`git`, `http`, `hub`, `bundles`, `cluster`) | disabled | No run can fetch an unreviewed definition. |
 | `enable-api-fields` | `stable` | No alpha or beta behavior. |
 | `disable-creds-init` | `true` | No credential initialization; the CI carries no credentials. |
-| `coschedule` | `pipelineruns` | One affinity assistant per run, which permits a task to bind both the source and cache claims. |
+| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster like the local kind installation. |
 | `send-cloudevents-for-runs` | `false` | No event sink is configured. |
 
 ## The catalog
@@ -100,6 +100,7 @@ Four Tasks and three Pipelines in namespace `ai-sdlc-ci`. Each pipeline is
 | `ai-sdlc-maven-build-test` | `maven-build-test` | none | yes (offline) |
 | `ai-sdlc-maven-dependencies` | `maven-dependencies` | DNS + public HTTPS | trusted base-branch head only |
 | `ai-sdlc-npm-lock-update` | `npm-lock-update` | DNS + public HTTPS | no (`--ignore-scripts`) |
+| `ai-sdlc-dependency-audit` | `dependency-audit` | DNS + public HTTPS | no (npm audit on copies; osv-scanner parses POMs) |
 
 **`source-checkout`** accepts `repository` (`owner/name`) and `revision`. The
 revision must be a full lowercase 40-character SHA; branch names and short
@@ -167,6 +168,47 @@ old and new versions (or `resolutionChanged` when only the resolved URL or
 integrity changed), the diff size and its SHA-256; the full diff and lockfile are
 written under `npm-lock-update/` in the run's source workspace.
 
+**`dependency-audit`** reports known vulnerabilities of one npm lockfile or
+one Maven module (target must be a catalog npm directory or module). Neither
+tool runs project code. **What leaves the cluster:**
+
+- **npm:** `npm audit --json --package-lock-only` runs on copies with the
+  `npm-lock-update` isolation and POSTs the lockfile's package names and
+  versions to the registry's bulk advisory endpoint. `registry-url` may only be
+  empty (the public registry), `https://registry.npmjs.org/`, or the dependency
+  proxy by cluster IP (`http://CLUSTER-IP:8081/`).
+- **Maven:** `osv-scanner scan source --data-source=native` (pinned v2.7.1)
+  resolves the dependency graph itself, fetching POMs from
+  `maven-registry-url` (empty means Maven Central; otherwise the proxy,
+  `http://CLUSTER-IP:8080/maven2`), instead of its default deps.dev. It sends
+  package names and versions to `api.osv.dev` to look up advisories.
+
+Passing the proxy for both sends the dependency lists through it
+(osv-scanner's api.osv.dev query is not proxied), but it only becomes the sole
+path once the task carries the `dependency-proxy` egress label instead of
+`fetch` (Stage 2b, after the proxy change merges). Until then the pod's fetch
+egress allows HTTPS to any public host, including repositories that a
+`pom.xml` declares, which native resolution contacts. The summary is the input
+the vulnerability intake consumes:
+
+```json
+{"ecosystem":"npm","target":"ui-super-heroes/src/main/webui","toolExitCode":1,"complete":true,"reason":"",
+ "packages":1398,"vulnerable":66,"bySeverity":{"critical":4,"high":34,"moderate":17,"low":11,"unknown":0},
+ "coverage":{"lockfile":true,"devDependencies":true},
+ "findings":[{"package":"form-data","version":"3.0.0 - 3.0.4","severity":"critical",
+              "ids":["https://github.com/advisories/GHSA-fjxv-7rqg-78g4"],"fixAvailable":true}],"truncated":true}
+```
+
+Findings are sorted by severity and trimmed to the result budget (measured as
+Go encodes it); osv-scanner severities are CVSS scores mapped to bands.
+`complete` is the verdict that the audit covered what `coverage` says, and
+findings are its output, not a failure. Coverage limits: for Maven,
+`testScope: false` (test-scope dependencies are not resolved), `packages` is
+`null` (osv-scanner reports only vulnerable packages), and any resolution
+error message (`resolutionMessages`) makes the audit incomplete because
+osv-scanner's exit code does not reflect it. A report over 16 MiB is not
+parsed; the summary says `complete: false` with the reason.
+
 The pipelines use the image's pinned Maven rather than the project's `./mvnw`,
 so the build tool is reviewed and pinned instead of downloaded by a script in
 the candidate tree.
@@ -214,16 +256,81 @@ or node affinity; the local kind node is single-node.
 
 ### Sandbox
 
-`--sandbox` puts the `build-test` task under the `ai-sdlc-offline` RuntimeClass
-(gVisor, installed by `./install.sh sandbox`) through the PipelineRun's
-per-task pod template. Fetch tasks never use it, because that class sets
-`network = "none"`: an npm run under it failed with `EAI_AGAIN`. In the
-disposable cluster a plain four-container pod (Maven, PostgreSQL and MongoDB
-images, read-only roots) started and ran under gVisor, but Tekton task pods
-failed to start their sub-containers (`failed to setupFS: creating mount
-namespace: creating root file system: input/output error`). The sandbox is
-therefore opt-in until that is understood; the network-less policy, `mvn -o`
-and restricted Pod Security apply either way.
+`maven-build-test`, the only task that runs candidate code, runs under the
+`ai-sdlc-offline` RuntimeClass (gVisor, `network = "none"`) through the
+PipelineRun's per-task pod template. Install it with `./install.sh sandbox`;
+admission refuses a `maven-build-test` run whose `build-test` task does not
+request it, and the run tool also checks that the node's per-scope task limit
+was raised (otherwise: re-run `./install.sh sandbox`). Fetch tasks never use it: the class has no network, so an
+npm run under it failed with `EAI_AGAIN`.
+
+**Node task limit.** gVisor runs every container of a pod (sandbox, gofers and
+systrap stubs) inside the systemd scope of the pod's first container, and
+systemd caps each container scope at `DefaultTasksMax`, 15% of the node's pid
+limit: 307 for a kind node under podman's default of 2048. A Tekton task pod
+has two init containers plus one container per step and sidecar; with three or
+more, the sandbox died with `failed to create new OS thread (have 57 already;
+errno=11)` and the kubelet reported `creating root file system: input/output
+error` or `the sandbox exited before the container started`. One- and
+two-step tasks, emptyDir volumes and PVC workspaces all worked, which is how the
+cause was isolated (runsc debug logs showed the panic).
+
+`./install.sh sandbox` (and every `./install.sh local` that installs the
+offline runtime) now sets two node limits:
+
+- **Per-scope tasks:** a reviewed systemd drop-in
+  (`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
+  `DefaultTasksMax=768`) sized from the measured peak of a sandboxed Maven
+  build-test (603 tasks) plus a 27% margin. It re-executes the node's systemd
+  manager, verifies the value and records `scopeTasksMax` in its report. It
+  only ever raises the default: a node without a pid limit (docker) keeps its
+  larger default and gets no drop-in. It refuses a node whose pid limit is
+  below twice the value, and a drop-in that ai-sdlc did not write. **It applies
+  to every container scope created afterwards, sandboxed or not.**
+- **Per-pod pids:** the kubelet `podPidsLimit` (768, `kubelet-pods.json`), in
+  `deploy/local/kind.yaml` for new clusters and added to an existing node's
+  kubelet configuration atomically: the installer stages the file, checks it is
+  the original plus the reviewed value, moves it into place, restarts the
+  kubelet and confirms the value through the node's `/configz`; on failure it
+  restores the original and restarts the kubelet again. Pods created before
+  the change keep running without the bound until they are recreated. A value
+  that an earlier ai-sdlc revision set (marked, or listed under `previous`,
+  such as the earlier 1024 in kind.yaml) is upgraded; any other is refused.
+- **CI concurrency:** candidate code runs only in `build-test` pods, which
+  admission requires to carry the `ai-sdlc-ci-candidate` PriorityClass (value
+  0, never preempts). Two ResourceQuotas scoped by that class allow one
+  candidate pod and one other (fetch) pod at a time; Tekton retries a task pod
+  refused by a quota until a pod ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
+  with it, each run held an assistant pod, and two concurrent runs took the
+  whole quota while their task pods stayed pending, a deadlock observed in the
+  disposable cluster. Tekton does not remove assistants that an earlier
+  configuration started once the mode changes, so the installer deletes
+  affinity-assistant StatefulSets whose PipelineRun is finished or gone
+  (`releasedAssistants` in its report) and keeps those of runs still in
+  progress.
+
+The arithmetic for a podman kind node (2,048 pids), with the node's own
+baseline measured on the existing kind nodes (about 560 pids idle, a peak near
+1,100): baseline peak 1,100 + one candidate pod at its 768 limit + one fetch
+pod (trusted inputs; a Maven pod with tests peaked at 146, so about 150) =
+about 2,018. The sandboxed build-test peaked at 603, so it fits its 768 limit,
+and a fork bomb in the candidate pod stops at 768 while fetch pods run only
+reviewed or scriptless code. The kubelet edit also recovers when an earlier
+run moved the file but stopped before the restart: a value present in the file
+but not reported by `/configz` triggers a restart and a second check.
+
+Changing the value: edit the reviewed files and re-run `./install.sh
+sandbox`; the installer replaces its own earlier drop-in and kubelet line.
+Upgrading from an install without them works the same way, and until then the
+run tool refuses sandboxed runs with "re-run ./install.sh sandbox". Removal:
+delete `/etc/systemd/system.conf.d/ai-sdlc-offline-tasks.conf` on the node and
+run `systemctl daemon-reexec`, and remove the marked `podPidsLimit` lines from
+`/var/lib/kubelet/config.yaml` and restart the kubelet; sandboxed Tekton pods
+then fail again.
+
+Measured: `maven-build-test` rest-villains with the PostgreSQL sidecar under
+gVisor passed 94/94 (72 unit, 22 integration) in 2 min 1 s of Maven, against
+1 min 42 s with the default runtime.
 
 ### Maven proxy
 
@@ -342,7 +449,16 @@ per service directory. Its upstream workflow `simple-build-test.yml` runs
      --module rest-villains --revision "$sha" --wait 3600
    ```
 
-4. Update the UI's npm lockfile for one package, or apply audit fixes:
+4. Audit dependencies:
+
+   ```bash
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem maven --directory rest-villains --wait 1800
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem npm --directory ui-super-heroes/src/main/webui --wait 1200
+   ```
+
+5. Update the UI's npm lockfile for one package, or apply audit fixes:
 
    ```bash
    python3 tools/tekton_ci_run.py npm-lock-update --cluster ai-sdlc --project $P \
