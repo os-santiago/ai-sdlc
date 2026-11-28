@@ -315,7 +315,13 @@ baseline measured on the existing kind nodes (about 560 pids idle, a peak near
 pod (trusted inputs; a Maven pod with tests peaked at 146, so about 150) =
 about 2,018. The sandboxed build-test peaked at 603, so it fits its 768 limit,
 and a fork bomb in the candidate pod stops at 768 while fetch pods run only
-reviewed or scriptless code. The kubelet edit also recovers when an earlier
+reviewed or scriptless code. The fetch term is a measurement, not a limit:
+only `podPidsLimit` caps a fetch pod, at 768 like any pod. The budget holds as
+long as fetch pods stay near their measured peak (146), which their reviewed,
+scriptless inputs make likely; a fetch pod that grew to its cap would push the
+total to about 2,636 and leave the node's own processes short. Re-measure
+after changing a fetch task (for example `npm-lock-update` with
+`--ignore-scripts` removed, which this catalog never does). The kubelet edit also recovers when an earlier
 run moved the file but stopped before the restart: a value present in the file
 but not reported by `/configz` triggers a restart and a second check.
 

@@ -147,6 +147,11 @@ class ManifestTests(unittest.TestCase):
         self.assertIn('podPidsLimit: %d' % pods, (tekton.ROOT / 'runtime/k8s/deploy/local/kind.yaml').read_text())
         rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
         self.assertIn("s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'", rules, 'build-test must use the candidate quota')
+        # Only build-test may claim the single candidate slot: a checkout or
+        # npm task with the class would hold it without running candidate code.
+        flat = ' '.join(' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations']).split())
+        self.assertIn("(s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate' && object.spec.pipelineRef.name == 'ai-sdlc-maven-build-test' "
+                      "&& s.pipelineTaskName == 'build-test')", flat)
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
