@@ -48,10 +48,12 @@ spec:
           (!has(s.podTemplate) ||
            (s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName']) &&
             (!has(s.podTemplate.runtimeClassName) || s.podTemplate.runtimeClassName in ['ai-sdlc-offline']) &&
-            (!has(s.podTemplate.priorityClassName) || s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'))) &&
+            (!has(s.podTemplate.priorityClassName) ||
+             (s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate' &&
+              object.spec.pipelineRef.name == 'ai-sdlc-maven-build-test' && s.pipelineTaskName == 'build-test')))) &&
           (!has(s.stepSpecs) || s.stepSpecs.all(x, x.all(k, k in ['name', 'computeResources']))) &&
           (!has(s.sidecarSpecs) || s.sidecarSpecs.all(x, x.all(k, k in ['name', 'computeResources'])))))
-      message: pod templates allow only automountServiceAccountToken, securityContext, the offline runtime class and the candidate priority class; step and sidecar overrides only computeResources
+      message: pod templates allow only automountServiceAccountToken, securityContext, the offline runtime class and, on build-test alone, the candidate priority class; step and sidecar overrides only computeResources
     - expression: >-
         has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
         object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update', 'ai-sdlc-dependency-audit']
