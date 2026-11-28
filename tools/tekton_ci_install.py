@@ -26,11 +26,11 @@ DESIRED = ROOT / 'runtime/k8s/deploy/tekton-ci'
 CI_DIR = DESIRED / 'ci'
 CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml',
             'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
-            'task-npm-lock-update.yaml', 'pipeline-maven-build-test.yaml', 'pipeline-maven-dependencies.yaml',
-            'pipeline-npm-lock-update.yaml')
-TASKS = ('source-checkout', 'maven-build-test', 'maven-dependencies', 'npm-lock-update')
+            'task-npm-lock-update.yaml', 'task-dependency-audit.yaml', 'pipeline-maven-build-test.yaml',
+            'pipeline-maven-dependencies.yaml', 'pipeline-npm-lock-update.yaml', 'pipeline-dependency-audit.yaml')
+TASKS = ('source-checkout', 'maven-build-test', 'maven-dependencies', 'npm-lock-update', 'dependency-audit')
 # The reviewed catalog pipelines.
-PIPELINES = ('ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update')
+PIPELINES = ('ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update', 'ai-sdlc-dependency-audit')
 CI_NAMESPACE = 'ai-sdlc-ci'
 FIELD_MANAGER = 'ai-sdlc-tekton-ci'
 OWNER_ANNOTATION = 'ai-sdlc.io/cluster-uid'

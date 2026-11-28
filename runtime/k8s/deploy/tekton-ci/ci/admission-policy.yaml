@@ -52,7 +52,7 @@ spec:
       message: pod templates allow only automountServiceAccountToken, securityContext and the offline runtime class; step and sidecar overrides only computeResources
     - expression: >-
         has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
-        object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update']
+        object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update', 'ai-sdlc-dependency-audit']
       message: only the reviewed catalog pipelines may run
     - expression: >-
         has(object.spec.taskRunTemplate) && has(object.spec.taskRunTemplate.serviceAccountName) &&

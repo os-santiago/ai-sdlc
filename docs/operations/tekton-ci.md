@@ -100,6 +100,7 @@ Four Tasks and three Pipelines in namespace `ai-sdlc-ci`. Each pipeline is
 | `ai-sdlc-maven-build-test` | `maven-build-test` | none | yes (offline) |
 | `ai-sdlc-maven-dependencies` | `maven-dependencies` | DNS + public HTTPS | trusted base-branch head only |
 | `ai-sdlc-npm-lock-update` | `npm-lock-update` | DNS + public HTTPS | no (`--ignore-scripts`) |
+| `ai-sdlc-dependency-audit` | `dependency-audit` | DNS + public HTTPS | no (npm audit on copies; osv-scanner parses POMs) |
 
 **`source-checkout`** accepts `repository` (`owner/name`) and `revision`. The
 revision must be a full lowercase 40-character SHA; branch names and short
@@ -166,6 +167,47 @@ Packages are names only (at most 16; no URLs, paths, versions or shell syntax):
 old and new versions (or `resolutionChanged` when only the resolved URL or
 integrity changed), the diff size and its SHA-256; the full diff and lockfile are
 written under `npm-lock-update/` in the run's source workspace.
+
+**`dependency-audit`** reports known vulnerabilities of one npm lockfile or
+one Maven module (target must be a catalog npm directory or module). Neither
+tool runs project code. **What leaves the cluster:**
+
+- **npm:** `npm audit --json --package-lock-only` runs on copies with the
+  `npm-lock-update` isolation and POSTs the lockfile's package names and
+  versions to the registry's bulk advisory endpoint. `registry-url` may only be
+  empty (the public registry), `https://registry.npmjs.org/`, or the dependency
+  proxy by cluster IP (`http://CLUSTER-IP:8081/`).
+- **Maven:** `osv-scanner scan source --data-source=native` (pinned v2.7.1)
+  resolves the dependency graph itself, fetching POMs from
+  `maven-registry-url` (empty means Maven Central; otherwise the proxy,
+  `http://CLUSTER-IP:8080/maven2`), instead of its default deps.dev. It sends
+  package names and versions to `api.osv.dev` to look up advisories.
+
+Passing the proxy for both sends the dependency lists through it
+(osv-scanner's api.osv.dev query is not proxied), but it only becomes the sole
+path once the task carries the `dependency-proxy` egress label instead of
+`fetch` (Stage 2b, after the proxy change merges). Until then the pod's fetch
+egress allows HTTPS to any public host, including repositories that a
+`pom.xml` declares, which native resolution contacts. The summary is the input
+the vulnerability intake consumes:
+
+```json
+{"ecosystem":"npm","target":"ui-super-heroes/src/main/webui","toolExitCode":1,"complete":true,"reason":"",
+ "packages":1398,"vulnerable":66,"bySeverity":{"critical":4,"high":34,"moderate":17,"low":11,"unknown":0},
+ "coverage":{"lockfile":true,"devDependencies":true},
+ "findings":[{"package":"form-data","version":"3.0.0 - 3.0.4","severity":"critical",
+              "ids":["https://github.com/advisories/GHSA-fjxv-7rqg-78g4"],"fixAvailable":true}],"truncated":true}
+```
+
+Findings are sorted by severity and trimmed to the result budget (measured as
+Go encodes it); osv-scanner severities are CVSS scores mapped to bands.
+`complete` is the verdict that the audit covered what `coverage` says, and
+findings are its output, not a failure. Coverage limits: for Maven,
+`testScope: false` (test-scope dependencies are not resolved), `packages` is
+`null` (osv-scanner reports only vulnerable packages), and any resolution
+error message (`resolutionMessages`) makes the audit incomplete because
+osv-scanner's exit code does not reflect it. A report over 16 MiB is not
+parsed; the summary says `complete: false` with the reason.
 
 The pipelines use the image's pinned Maven rather than the project's `./mvnw`,
 so the build tool is reviewed and pinned instead of downloaded by a script in
@@ -342,7 +384,16 @@ per service directory. Its upstream workflow `simple-build-test.yml` runs
      --module rest-villains --revision "$sha" --wait 3600
    ```
 
-4. Update the UI's npm lockfile for one package, or apply audit fixes:
+4. Audit dependencies:
+
+   ```bash
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem maven --directory rest-villains --wait 1800
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem npm --directory ui-super-heroes/src/main/webui --wait 1200
+   ```
+
+5. Update the UI's npm lockfile for one package, or apply audit fixes:
 
    ```bash
    python3 tools/tekton_ci_run.py npm-lock-update --cluster ai-sdlc --project $P \

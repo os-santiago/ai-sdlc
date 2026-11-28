@@ -16,7 +16,7 @@ import tekton_ci_run as runner
 
 PROJECT = tekton.DESIRED / 'projects/quarkus-super-heroes.json'
 SHA = 'ae00455c01a7a50d89ae8f1db99483abd27abe25'
-FETCH_TASKS = {'source-checkout', 'maven-dependencies', 'npm-lock-update'}
+FETCH_TASKS = {'source-checkout', 'maven-dependencies', 'npm-lock-update', 'dependency-audit'}
 
 
 def documents():
@@ -97,7 +97,7 @@ class ManifestTests(unittest.TestCase):
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
             ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
-            ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
+            ('Task', 'npm-lock-update'), ('Task', 'dependency-audit')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
             if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding'):
                 self.assertEqual(doc['metadata']['namespace'], 'ai-sdlc-ci', doc['metadata']['name'])
@@ -553,6 +553,90 @@ class ScriptTests(unittest.TestCase):
         self.assertTrue(text.startswith('#!/usr/local/bin/node'))
 
 
+    def audit(self, directory, ecosystem, report, code):
+        text = step('dependency-audit', 'summarize')['script']
+        Path(directory, 'tmp/audit').mkdir(parents=True, exist_ok=True)
+        if report is not None:
+            Path(directory, 'tmp/audit/report.json').write_text(json.dumps(report))
+        if code is not None:
+            Path(directory, 'tmp/audit/exit-code').write_text(str(code))
+        result = subprocess.run([shutil.which('node'), '-e', text.replace('/tmp/', directory + '/tmp/')],
+                                env={'ECOSYSTEM': ecosystem, 'TARGET': 'web', 'RESULT': directory + '/result'},
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(Path(directory, 'result').read_text())
+
+    def test_osv_resolves_natively_through_the_reviewed_registry(self):
+        text = step('dependency-audit', 'osv-scanner')['script']
+        self.assertIn('--data-source=native', text)
+        self.assertIn('--maven-registry="$registry"', text)
+        self.assertIn('https://repo.maven.apache.org/maven2', text)
+
+    def test_audit_bounds_oversized_reports_and_reports_coverage(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        text = step('dependency-audit', 'summarize')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'tmp/audit').mkdir(parents=True)
+            with open(Path(directory, 'tmp/audit/report.json'), 'wb') as report:
+                report.truncate(17 * 1024 * 1024)
+            Path(directory, 'tmp/audit/exit-code').write_text('1')
+            subprocess.run([shutil.which('node'), '-e', text.replace('/tmp/', directory + '/tmp/')],
+                           env={'ECOSYSTEM': 'maven', 'TARGET': 'm', 'RESULT': directory + '/result'}, check=True, timeout=30)
+            summary = json.loads(Path(directory, 'result').read_text())
+        self.assertEqual((summary['complete'], summary['reason']), (False, 'report larger than 16 MiB'))
+        osv = {'results': [{'packages': [{'package': {'name': 'g:a', 'version': '1'}, 'groups': [{'ids': ['X'], 'max_severity': '7'}]}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'tmp/audit').mkdir(parents=True)
+            Path(directory, 'tmp/audit/stderr.txt').write_text('failed resolving org.example:parent:1.0\n')
+            summary = self.audit(directory, 'maven', osv, 1)
+        self.assertEqual(summary['coverage'], {'resolution': 'native', 'testScope': False, 'resolutionMessages': 1})
+        self.assertFalse(summary['complete'], 'a resolution failure leaves the audit incomplete')
+        self.assertEqual(summary['reason'], 'dependency resolution reported errors')
+
+    def test_audit_summarizes_npm_and_osv_reports_within_bounds(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        npm = {'metadata': {'dependencies': {'total': 1500}}, 'vulnerabilities': {
+            'axios': {'severity': 'high', 'range': '<1.21.1', 'fixAvailable': True,
+                      'via': [{'source': 1, 'url': 'https://github.com/advisories/GHSA-aaaa'}]},
+            'lodash': {'severity': 'low', 'range': '<4.17.21', 'fixAvailable': False, 'via': ['axios']}}}
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self.audit(directory, 'npm', npm, 1)
+        self.assertEqual((summary['complete'], summary['toolExitCode'], summary['packages'], summary['vulnerable']), (True, 1, 1500, 2))
+        self.assertEqual(summary['bySeverity'], {'critical': 0, 'high': 1, 'moderate': 0, 'low': 1, 'unknown': 0})
+        self.assertEqual(summary['findings'][0], {'package': 'axios', 'version': '<1.21.1', 'severity': 'high',
+                                                  'ids': ['https://github.com/advisories/GHSA-aaaa'], 'fixAvailable': True})
+        osv = {'results': [{'source': {'path': '/x/pom.xml'}, 'packages': [
+            {'package': {'name': 'g:a%d' % i, 'version': '1.0'},
+             'groups': [{'ids': ['GHSA-%d' % i], 'aliases': ['CVE-%d' % i, 'GHSA-%d' % i], 'max_severity': str(i % 10 + 0.5)}]}
+            for i in range(60)]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self.audit(directory, 'maven', osv, 1)
+        self.assertEqual((summary['complete'], summary['packages'], summary['vulnerable'], summary['truncated']), (True, None, 60, True))
+        self.assertLessEqual(len(summary['findings']), 20)
+        self.assertEqual(summary['findings'][0]['severity'], 'critical')
+        self.assertLessEqual(len(json.dumps(json.dumps(summary, separators=(',', ':')))), 1600, 'measured JSON-escaped against the per-container budget')
+        with tempfile.TemporaryDirectory() as directory:
+            broken = self.audit(directory, 'maven', None, 2)
+        self.assertEqual((broken['complete'], broken['toolExitCode'], broken['findings']), (False, 2, []))
+
+    def test_audit_validation_refuses_unsafe_targets_and_registries(self):
+        text = step('dependency-audit', 'validate')['script']
+        def check(ecosystem, target, registry='', maven=''):
+            return subprocess.run(['sh', '-c', text], env={'ECOSYSTEM': ecosystem, 'TARGET': target, 'REGISTRY_URL': registry,
+                                                           'MAVEN_REGISTRY_URL': maven, 'PATH': '/usr/bin:/bin'},
+                                  capture_output=True, timeout=10).returncode
+        for case in (('pip', 'web'), ('npm', '.'), ('npm', '../x'), ('maven', 'a/../b'), ('npm', '/abs'),
+                     ('npm', 'evil\n;rm -rf'), ('maven', 'rest-villains\n../x'),
+                     ('npm', 'web', 'https://evil.example/'), ('npm', 'web', 'http://10.96.0.12:8081/\nx'),
+                     ('maven', 'm', '', 'https://deps.dev/maven2'), ('maven', 'm', '', 'http://evil:8080/maven2')):
+            self.assertEqual(check(*case), 2, case)
+        for case in (('maven', 'rest-villains'), ('npm', 'web', 'https://registry.npmjs.org/'),
+                     ('npm', 'web', 'http://10.96.0.12:8081/'), ('maven', 'm', '', 'http://10.96.0.12:8080/maven2')):
+            self.assertEqual(check(*case), 0, case)
+
+
 class RunToolTests(unittest.TestCase):
     def test_build_test_run_is_read_only_and_can_be_sandboxed(self):
         pipeline = by_kind('Pipeline')['ai-sdlc-maven-build-test']['spec']
@@ -577,6 +661,29 @@ class RunToolTests(unittest.TestCase):
         self.assertNotIn('taskRunSpecs', runner.maven_dependencies('a/b', SHA, '.', ['none'], [])['spec'],
                          'the offline gVisor class would cut the fetch task off')
         self.assertEqual(run['metadata']['labels']['ai-sdlc.io/repository'], 'os-santiago.quarkus-super-heroes')
+
+    def test_audit_run_binds_its_pipeline_inputs_and_passes_when_complete(self):
+        run = runner.dependency_audit('a/b', SHA, 'maven', 'rest-villains')
+        pipeline = by_kind('Pipeline')['ai-sdlc-dependency-audit']['spec']
+        self.assertEqual({p['name'] for p in run['spec']['params']}, {p['name'] for p in pipeline['params']})
+        self.assertNotIn('taskRunSpecs', run['spec'])
+        for bad in (('pip', 'x', ''), ('npm', '.', ''), ('maven', 'x', 'https://r.example/'), ('npm', 'x', 'https://evil.example/')):
+            with self.assertRaises(ValueError):
+                runner.dependency_audit('a/b', SHA, *bad)
+        with self.assertRaises(ValueError):
+            runner.dependency_audit('a/b', SHA, 'maven', 'x', '', 'https://deps.dev/maven2')
+        base = ['dependency-audit', '--project', str(PROJECT), '--revision', SHA]
+        with self.assertRaisesRegex(ValueError, 'Maven module'):
+            runner.main(base + ['--ecosystem', 'maven', '--directory', 'ui-super-heroes/src/main/webui'])
+        with self.assertRaisesRegex(ValueError, 'npm directory'):
+            runner.main(base + ['--ecosystem', 'npm', '--directory', 'rest-villains'])
+        # Without a catalog the target is only validated, never looked up.
+        args = runner.argparse.Namespace(pipeline='dependency-audit', repository='a/b', revision=SHA, ecosystem='maven',
+                                         directory='m', registry_url='', maven_mirror_url='', sandbox=False, runtime_class='ai-sdlc-offline')
+        self.assertEqual(runner.render_from_args(args, None)['spec']['pipelineRef'], {'name': 'ai-sdlc-dependency-audit'})
+        observed = {'succeeded': True, 'commit': SHA, 'summary': {'complete': True, 'vulnerable': 3}}
+        self.assertTrue(runner.passed(observed, SHA), 'findings are output, not failure')
+        self.assertFalse(runner.passed(dict(observed, summary={'complete': False}), SHA))
 
     def test_dependencies_and_npm_runs_bind_their_pipeline_inputs(self):
         deps = runner.maven_dependencies('a/b', SHA, 'm', ['postgres'], [], mirror_url='http://dependency-proxy.ai-sdlc-dependencies.svc/maven2')

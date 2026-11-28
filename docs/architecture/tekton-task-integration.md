@@ -34,7 +34,7 @@ Installed by `./install.sh local --tekton-ci` into namespace `ai-sdlc-ci`
 | `maven-build-test` | `mvn -o verify` for one module, test services as sidecars | **none** | module, services, reviewed Maven switches | exit code, test counts, failing test names (≤10), compiler errors (≤5), missing-dependency flag |
 | `maven-dependencies` | `mvn verify` with test failures ignored, filling the shared cache | DNS + public HTTPS, or the proxy | module, services, mirror URL | as above |
 | `npm-lock-update` | `npm update <pkgs> --package-lock-only --ignore-scripts` or `npm audit fix --package-lock-only --ignore-scripts` | DNS + public HTTPS, or the proxy | directory, mode, package specs | changed entries (≤25), diff size and SHA-256 |
-| `dependency-audit` | npm audit JSON; OSV or OWASP for Maven | proxy / advisory DB | directory or module | structured findings (planned) |
+| `dependency-audit` | `npm audit --json` (npm); `osv-scanner` (Maven) | DNS + public HTTPS, or the proxy | ecosystem, directory or module | severity counts, up to 20 findings within the result budget, `complete` verdict |
 | `sast-results` | code-scanning alerts for a SHA | GitHub API | revision | alert list (optional, planned) |
 
 Each pipeline (`ai-sdlc-maven-build-test`, `ai-sdlc-maven-dependencies`,
