@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"sync"
 	"time"
 
@@ -42,7 +43,12 @@ func ParseToolCall(raw []byte) (ToolCall, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&c) != nil || decoder.More() || len(c.Diff) > MaxCandidateBytes {
+	if decoder.Decode(&c) != nil || len(c.Diff) > MaxCandidateBytes {
+		return ToolCall{}, ErrRequest
+	}
+	// Exactly one value: More reports false before a stray ] or }, so
+	// require that a second decode finds the end of the input.
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return ToolCall{}, ErrRequest
 	}
 	return c, nil
@@ -152,9 +158,12 @@ func InvokeTool(ctx context.Context, cluster Cluster, journal ToolJournal, budge
 	if err != nil {
 		return ToolResult{}, err
 	}
+	// The whole call counts against the budget, from the journal entry
+	// through the sweep and the run.
+	started := time.Now()
 	sequence, err := journal.Begin(ctx, call.Digest())
 	if err != nil {
-		budget.settle(allowed, 0)
+		budget.settle(allowed, time.Since(started))
 		return ToolResult{}, err
 	}
 	finish := func(record ToolRecord) error {
@@ -168,11 +177,10 @@ func InvokeTool(ctx context.Context, cluster Cluster, journal ToolJournal, budge
 		_ = SweepCandidates(sweep, cluster, time.Now(), CandidateSweepAge)
 		cancel()
 	}
-	runCtx, cancel := context.WithTimeout(ctx, allowed)
+	runCtx, cancel := context.WithDeadline(ctx, started.Add(allowed))
 	defer cancel()
 	var journalErr error
 	run := ""
-	started := time.Now()
 	outcome, err := RunReporting(runCtx, cluster, request, runtimeClass, poll, func(pipelineRun, configMap string) {
 		run = pipelineRun
 		if e := journal.Created(runCtx, sequence, pipelineRun, configMap); e != nil && journalErr == nil {

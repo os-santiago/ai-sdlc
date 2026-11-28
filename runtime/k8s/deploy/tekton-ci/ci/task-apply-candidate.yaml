@@ -102,7 +102,9 @@ spec:
         # The build compiles the work tree; the tree id must describe all of
         # it. Anything not staged (untracked, ignored or modified outside
         # the index) means the two differ.
-        if git status --porcelain=v1 --ignored --untracked-files=all | grep -Ev '^[MAD] ' | grep -q .; then
+        # --no-renames: status would otherwise pair a staged deletion and
+        # addition into R, which is the same content and still in the index.
+        if git status --porcelain=v1 --no-renames --ignored --untracked-files=all | grep -Ev '^[MAD] ' | grep -q .; then
           echo 'candidate work tree differs from the applied index' >&2; exit 2
         fi
         tree="$(git write-tree)"

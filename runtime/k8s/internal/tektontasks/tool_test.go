@@ -161,12 +161,40 @@ func TestToolBudgetSecondsHoldUnderConcurrentCalls(t *testing.T) {
 	}
 }
 
+type slowJournal struct{ memJournal }
+
+func (j *slowJournal) Begin(context.Context, string) (int, error) {
+	time.Sleep(50 * time.Millisecond)
+	return 0, errors.New("journal down")
+}
+
+// The whole call counts against the seconds budget, including the journal.
+func TestToolBudgetChargesTheJournalTime(t *testing.T) {
+	budget := &ToolBudget{MaxCalls: 2, MaxSeconds: 600}
+	call := ToolCall{Tool: "build_test", Target: "rest-villains"}
+	if _, err := InvokeTool(context.Background(), &fakeCluster{}, &slowJournal{}, budget, manifest(), call, sha, "", time.Millisecond); err == nil {
+		t.Fatal("journal failure ignored")
+	}
+	if budget.spent < 50*time.Millisecond || budget.spent > 600*time.Second {
+		t.Fatal("journal time not charged", budget.spent)
+	}
+}
+
 func TestToolCallsDecodeStrictly(t *testing.T) {
 	if _, err := ParseToolCall([]byte(`{"tool":"build_test","target":"m","diff":"","extra":1}`)); err == nil {
 		t.Fatal("accepted an unknown field")
 	}
 	if c, err := ParseToolCall([]byte(`{"tool":"build_test","target":"m","diff":"d"}`)); err != nil || c.Target != "m" {
 		t.Fatal("parse", c, err)
+	}
+	if _, err := ParseToolCall([]byte("{\"tool\":\"build_test\",\"target\":\"m\",\"diff\":\"d\"} \n")); err != nil {
+		t.Fatal("trailing space refused", err)
+	}
+	for _, trailing := range []string{`{"tool":"build_test","target":"m","diff":"d"}]`, `{"tool":"build_test","target":"m","diff":"d"}}`,
+		`{"tool":"build_test","target":"m","diff":"d"}{"tool":"x"}`, `{"tool":"build_test","target":"m","diff":"d"} []`} {
+		if _, err := ParseToolCall([]byte(trailing)); err == nil {
+			t.Fatal("accepted trailing data", trailing)
+		}
 	}
 	// The bound is on the decoded diff: escaping may grow its encoding.
 	for size, ok := range map[int]bool{MaxCandidateBytes: true, MaxCandidateBytes + 1: false} {
