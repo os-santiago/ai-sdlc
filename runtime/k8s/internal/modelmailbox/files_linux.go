@@ -191,6 +191,11 @@ func (s *Store) WriteToolResponse(id Identity, response Envelope) error {
 	if err != nil {
 		return errors.New("tool response has no valid pending request")
 	}
+	if request.Sequence > response.Sequence {
+		// The answered call ended unanswered and the generator already made
+		// a newer one: the answered call is no longer pending either.
+		return fmt.Errorf("%w: a newer tool request is pending", ErrPending)
+	}
 	if response.Sequence != request.Sequence || response.RequestSHA256 != request.RequestSHA256 || response.ExpiresAt != request.ExpiresAt {
 		return errors.New("tool response does not match pending request")
 	}

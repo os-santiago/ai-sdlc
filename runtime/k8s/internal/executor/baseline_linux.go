@@ -3,11 +3,13 @@ package executor
 import (
 	"context"
 	"path/filepath"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 )
 
 // BaselineRef records the source baseline commit outside the checked-out
-// branch (generatortools.BaselineRef).
-const BaselineRef = "refs/ai-sdlc/baseline"
+// branch; generator tools diff against it.
+const BaselineRef = generatortools.BaselineRef
 
 // InitializeBaseline is called only after VerifySource, before repository code
 // executes. The launcher supplies fixed paths and a fresh, private emptyDir.

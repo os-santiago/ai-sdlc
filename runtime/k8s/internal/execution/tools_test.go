@@ -271,3 +271,89 @@ func TestAssignmentToolsOnlyWithAProfileBudget(t *testing.T) {
 		t.Fatal("tools with a budget, or with an unbound profile")
 	}
 }
+
+type countingCluster struct{ created, configMaps int }
+
+func (c *countingCluster) Create(context.Context, map[string]any) (string, string, error) {
+	c.created++
+	return "run-1", "u-1", nil
+}
+func (c *countingCluster) Get(context.Context, string) (map[string]any, error) {
+	return nil, errors.New("no runs in this fixture")
+}
+func (c *countingCluster) Cancel(context.Context, string) error { return nil }
+func (c *countingCluster) CreateConfigMap(context.Context, map[string]any) error {
+	c.configMaps++
+	return nil
+}
+func (c *countingCluster) OwnConfigMap(context.Context, string, string, string) error { return nil }
+func (c *countingCluster) DeleteConfigMap(context.Context, string, string, string) error {
+	return nil
+}
+func (c *countingCluster) ListCandidateConfigMaps(context.Context) ([]map[string]any, error) {
+	return nil, nil
+}
+
+type countingJournal struct{ begun int }
+
+func (j *countingJournal) Begin(context.Context, string) (int, error)         { j.begun++; return j.begun, nil }
+func (j *countingJournal) Created(context.Context, int, string, string) error { return nil }
+func (j *countingJournal) Finish(context.Context, int, tektontasks.ToolRecord) error {
+	return nil
+}
+
+// Through the real generatorTools hook, a direct call the assignment does not
+// offer (npm, declared in the manifest but not offered) or a declared tool on
+// an undeclared target is answered 403 with no PipelineRun, no candidate and
+// no journal entry: the controller authorizes calls, not only the tools server.
+func TestGeneratorToolsHookRefusesCallsTheAssignmentDoesNotOffer(t *testing.T) {
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	// The manifest declares npm (with a directory, so the catalog would accept
+	// it) next to build_test; only build_test on rest-villains is offered.
+	m := project.Manifest{Version: project.ManifestVersion, Repository: "fixture/product", BaseBranch: "main", Tekton: &project.Tekton{
+		Modules:        map[string]project.TektonModule{"rest-villains": {Services: []string{"none"}}},
+		NpmDirectories: []string{"ui"},
+		Tools: []project.TektonTool{{Name: "build_test", Pipeline: project.TektonMavenBuildTest},
+			{Name: "npm_lock_update", Pipeline: project.TektonNpmLockUpdate}}}}
+	project.SetInstalled(&m)
+	spec := ToolSpecOf(m)
+	if len(spec.Tools) != 1 || spec.Tools[0].Name != "build_test" {
+		t.Fatal("fixture spec", spec)
+	}
+	profile := executor.Profile{Version: executor.ProfileVersion, Model: "fixture-model", MaxSteps: 8, MaxSeconds: 900, MaxTokens: 2048,
+		ADevSHA256: strings.Repeat("a", 64), Tools: &executor.ToolProfile{Calls: 4, Seconds: 600}}
+	profileRaw, _ := json.Marshal(profile)
+	a := executor.Assignment{Version: executor.AssignmentVersion, WorkItemID: "11111111-1111-4111-8111-111111111111", Attempt: 1, Repository: "fixture/product",
+		SourceSHA: strings.Repeat("b", 40), TreeSHA256: strings.Repeat("c", 64), ProfileSHA256: workspacebundle.Digest(profileRaw),
+		AuthorityRevision: strings.Repeat("e", 64), IssueNumbers: []int{1}, Title: "Fixture", Body: "Synthetic.", AcceptanceCriteria: []string{"x"},
+		ExpiresAt: time.Now().Add(time.Hour).UnixMilli(), Tools: spec}
+	raw, _ := json.Marshal(a)
+	digest := m.Digest()
+	load := func(context.Context) (PreparationInputs, Placement, error) {
+		return PreparationInputs{Policy: authority.Policy{Repository: "fixture/product", ProjectSHA256: digest}}, Placement{}, nil
+	}
+	session := &fakeToolSession{requests: []modelmailbox.Envelope{
+		toolRequest(1, `{"tool":"npm_lock_update","target":"ui","packages":["axios"],"diff":""}`),
+		toolRequest(2, `{"tool":"npm_lock_update","target":"ui","packages":["axios"],"diff":"--- a/A\n+++ b/A\n"}`),
+		toolRequest(3, `{"tool":"build_test","target":"rest-heroes","diff":""}`),
+	}}
+	cluster, journal := &countingCluster{}, &countingJournal{}
+	hook, err := generatorTools(context.Background(), Prepared{assignment: raw, profile: profileRaw}, load, session,
+		func() (tektontasks.Cluster, error) { return cluster, nil }, journal, nil)
+	if err != nil || hook == nil {
+		t.Fatal("hook", err)
+	}
+	for range 3 {
+		if err := hook(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(session.published) != 3 || cluster.created != 0 || cluster.configMaps != 0 || journal.begun != 0 {
+		t.Fatal("refused calls reached the cluster or the journal", len(session.published), cluster.created, cluster.configMaps, journal.begun)
+	}
+	for _, answer := range session.published {
+		if answer.Status != 403 {
+			t.Fatal("status", answer.Sequence, answer.Status, string(answer.Payload))
+		}
+	}
+}

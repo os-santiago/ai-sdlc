@@ -105,6 +105,32 @@ func TestToolRouteBoundsRequestsAndTimesOut(t *testing.T) {
 	}
 }
 
+// An answer to a call that ended unanswered, found while the generator's
+// next call is pending, is "no longer pending" too, not a failure.
+func TestLateToolAnswerBehindANewerCallIsNotPending(t *testing.T) {
+	s, httpServer := setupToolServer(t, ToolLimits{MaxCalls: 3, Wait: time.Second})
+	done := sendTool(httpServer, []byte(toolCall))
+	first := awaitToolRequest(t, s)
+	result(t, done, 504)
+	next := sendTool(httpServer, []byte(toolCall))
+	second := awaitToolRequest(t, s)
+	if second.Sequence != first.Sequence+1 {
+		t.Fatal("sequence", first.Sequence, second.Sequence)
+	}
+	late := first
+	late.Kind, late.Status, late.Payload, late.ExpiresAt = "tool-response", 200, []byte(`{"text":"late"}`), time.Now().Add(time.Minute).UnixMilli()
+	if err := s.WriteToolResponse(testIdentity, late); !errors.Is(err, ErrPending) {
+		t.Fatal("late answer behind a newer call", err)
+	}
+	// A mismatched answer for the current sequence is still an error.
+	wrong := second
+	wrong.Kind, wrong.Status, wrong.Payload, wrong.RequestSHA256 = "tool-response", 200, []byte(`{}`), Digest([]byte("other"))
+	if err := s.WriteToolResponse(testIdentity, wrong); err == nil || errors.Is(err, ErrPending) {
+		t.Fatal("mismatched answer", err)
+	}
+	result(t, next, 504)
+}
+
 // One call at a time: a second call while one is pending is refused at once
 // with tool_call_already_pending, and the pending call is unaffected.
 func TestToolRouteRefusesASecondConcurrentCall(t *testing.T) {
