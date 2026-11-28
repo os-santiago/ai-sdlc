@@ -1,7 +1,6 @@
 package podtransport
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -137,11 +136,18 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 			<-written
 		}
 	}()
-	var stdout, stderr, status bytes.Buffer
+	// Each channel copies its messages into fixed chunks and joins them once
+	// at the end: a growing buffer would briefly hold up to three times a
+	// large export, and keeping each message would cost far more than its
+	// bytes when messages are tiny.
 	limits := map[byte]int{protocol.StreamStdOut: operation.outputLimit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
-	buffers := map[byte]*bytes.Buffer{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
+	stdout, stderr, status := newFrames(operation.outputLimit), newFrames(8192), newFrames(8192)
+	buffers := map[byte]*frames{protocol.StreamStdOut: stdout, protocol.StreamStdErr: stderr, protocol.StreamErr: status}
 	closed := false
-	for frames := 0; frames < operation.frames; frames++ {
+	// operation.frames bounds messages that carry no bytes. Every other
+	// message spends at least one byte of a channel limit, so the byte limits
+	// already bound them, whatever chunk size the API server relays.
+	for empty := 0; empty < operation.frames; {
 		kind, reader, err := conn.NextReader()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
@@ -172,7 +178,10 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 		if err != nil || len(raw) > remaining {
 			return nil, 0, ErrTransport
 		}
-		buffer.Write(raw)
+		if len(raw) == 0 {
+			empty++
+		}
+		buffer.add(raw)
 	}
 	writeErr := <-written
 	joined = true
@@ -461,3 +470,44 @@ type publicationError struct {
 func (e publicationError) Error() string            { return "mailbox publication failed at " + e.stage }
 func (e publicationError) Unwrap() error            { return e.cause }
 func (e publicationError) PublicationStage() string { return e.stage }
+
+// frames accumulates one channel's messages in fixed-size chunks: memory
+// stays close to the bytes received however small the messages are (a
+// helper flushing one byte per message would otherwise make each message
+// cost hundreds of bytes), and no buffer is regrown.
+type frames struct {
+	chunk int
+	parts [][]byte
+	size  int
+}
+
+func newFrames(limit int) *frames {
+	return &frames{chunk: min(max(limit, 1), 1<<20)}
+}
+
+func (f *frames) add(p []byte) {
+	for len(p) > 0 {
+		if len(f.parts) == 0 || len(f.parts[len(f.parts)-1]) == cap(f.parts[len(f.parts)-1]) {
+			f.parts = append(f.parts, make([]byte, 0, f.chunk))
+		}
+		last := &f.parts[len(f.parts)-1]
+		n := min(len(p), cap(*last)-len(*last))
+		*last = append(*last, p[:n]...)
+		p = p[n:]
+		f.size += n
+	}
+}
+func (f *frames) Len() int { return f.size }
+
+// Bytes joins the chunks into one exact allocation and releases them.
+func (f *frames) Bytes() []byte {
+	if f.size == 0 {
+		return nil
+	}
+	joined := make([]byte, 0, f.size)
+	for _, p := range f.parts {
+		joined = append(joined, p...)
+	}
+	f.parts = nil
+	return joined
+}

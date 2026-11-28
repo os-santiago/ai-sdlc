@@ -125,7 +125,7 @@ func TestLimitsAndIdentity(t *testing.T) {
 	if _, e := Decode(raw); e == nil {
 		t.Fatal("count limit")
 	}
-	b.Files = make([]File, 5)
+	b.Files = make([]File, MaxContentBytes/MaxFileBytes+1)
 	for i := range b.Files {
 		b.Files[i] = File{fmt.Sprint(i), 0644, bytes.Repeat([]byte("x"), MaxFileBytes)}
 	}
@@ -278,7 +278,8 @@ func TestFileStateIgnoresAccessTimeOnly(t *testing.T) {
 func TestImportBoundsImplicitDirectoryNodesBeforeWriting(t *testing.T) {
 	b := fixture()
 	b.Files = []File{}
-	for i := 0; i < 300; i++ {
+	// Each file adds itself and 30 implicit directories: one node over.
+	for i := 0; i <= MaxNodes/31; i++ {
 		b.Files = append(b.Files, File{fmt.Sprintf("%d/", i) + strings.Repeat("d/", 29) + "file", 0644, []byte{}})
 	}
 	parent := t.TempDir()

@@ -28,12 +28,9 @@ func VerifySource(parent string, a Assignment) error {
 	if e = unix.Fstatat(fd, "git", &st, unix.AT_SYMLINK_NOFOLLOW); e != unix.ENOENT {
 		return ErrInvalid
 	}
-	b, e := workspacebundle.Export(parent, a.SourceSHA)
-	if e != nil {
-		return ErrInvalid
-	}
-	digest, e := b.TreeDigest()
-	if e != nil || digest != a.TreeSHA256 {
+	// Hashes one file at a time instead of holding the tree in memory.
+	summary, e := workspacebundle.ExportSummary(parent, a.SourceSHA)
+	if e != nil || summary.TreeDigest != a.TreeSHA256 {
 		return ErrInvalid
 	}
 	return nil

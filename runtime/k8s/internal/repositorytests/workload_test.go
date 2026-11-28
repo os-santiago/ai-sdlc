@@ -44,7 +44,7 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 	}
 	tests := containers[0].(map[string]any)
 	limits := tests["resources"].(map[string]any)["limits"].(map[string]any)
-	if limits["ephemeral-storage"] != "1408Mi" || limits["memory"] != "1Gi" {
+	if limits["ephemeral-storage"] != "2176Mi" || limits["memory"] != "1Gi" {
 		t.Fatal("the disk limit must cover the scratch, workspace and runner volumes", limits)
 	}
 	if tests["name"] != "tests" || tests["image"] != testPod().Verification.Image {
@@ -180,6 +180,23 @@ func TestPodsWithoutAnalysisRenderExactlyAsBefore(t *testing.T) {
 		w, err := CompilePod(p)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// The large-repository bounds changed only the workspace volume
+		// (256Mi to 1Gi) and so the tests container's disk, which covers
+		// it; reverting those reproduces main.
+		spec := w.Pod["spec"].(map[string]any)
+		volume := spec["volumes"].([]any)[0].(map[string]any)
+		resources := spec["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+		if volume["name"] != "workspace" || volume["emptyDir"].(map[string]any)["sizeLimit"] != WorkspaceVolume {
+			t.Fatal("workspace volume", volume)
+		}
+		volume["emptyDir"].(map[string]any)["sizeLimit"] = "256Mi"
+		for _, kind := range []string{"requests", "limits"} {
+			quota := resources[kind].(map[string]any)
+			if quota["ephemeral-storage"] != "2176Mi" {
+				t.Fatal("tests disk", kind, quota)
+			}
+			quota["ephemeral-storage"] = "1408Mi"
 		}
 		raw, _ := json.Marshal(w)
 		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != want[run] {

@@ -191,12 +191,14 @@ succeeded pod, from the same container instance, as exactly one line.
 - `repeat` is 1–3 and the test timeout 30–600 seconds.
 - At most 6 backing services. Each one is non-root, uses a port of at least
   1024 and is ready within 180 seconds. A candidate's repetitions share them.
-- The imported tree is bounded by the workspace-bundle limits (16 MiB of
-  content, 4096 files) and has no `.git`: builds that need git metadata fail.
+- The imported tree is bounded by the workspace-bundle limits (128 MiB of
+  content, 16,384 files, 4 MiB per file; see
+  [Large repositories](../operations/large-repositories.md)) and has no `.git`:
+  builds that need git metadata fail.
   Dependencies must be vendored, in the toolchain image, or in a sealed
   dependency cache that every run mounts read-only (no network; see
   [the dependency cache](../operations/dependency-cache.md)).
-- The workspace volume holds the tree and any build output (256 MiB).
+- The workspace volume holds the tree and any build output (1 GiB, on disk).
 - At most 512 test cases, a 4 MiB report and 16 levels of suite nesting.
 - The verifier namespace's resource quota bounds what a run can request; the
   installer must size it for the manifest (slice 7).

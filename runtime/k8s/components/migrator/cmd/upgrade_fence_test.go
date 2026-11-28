@@ -61,13 +61,23 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count < 34 || count > 40 {
+	if count < 34 || count > 41 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 40 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" || source[39].Filename != "0040_merge_retry_before_send.sql" {
+	if len(source) != 41 || source[40].Filename != "0041_large_workspace_bounds.sql" || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" || source[39].Filename != "0040_merge_retry_before_send.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if count < 41 {
+		if _, err = db.Pool.ExecContext(ctx, `ALTER TABLE public.execution_lifecycles DROP CONSTRAINT execution_lifecycles_source_bytes_check;
+ ALTER TABLE public.execution_lifecycles ADD CONSTRAINT execution_lifecycles_source_bytes_check CHECK(source_bytes BETWEEN 1 AND 33554432);
+ ALTER TABLE public.execution_candidates DROP CONSTRAINT execution_candidates_export_bytes_check;
+ ALTER TABLE public.execution_candidates ADD CONSTRAINT execution_candidates_export_bytes_check CHECK(export_bytes BETWEEN 1 AND 33554432);
+ DELETE FROM public.schema_migrations WHERE filename='0041_large_workspace_bounds.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:40]
 	}
 	if count < 40 {
 		if _, err = db.Pool.ExecContext(ctx, `DROP INDEX public.merge_requests_publication_attempt;

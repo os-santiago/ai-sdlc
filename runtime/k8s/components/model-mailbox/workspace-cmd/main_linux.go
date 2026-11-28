@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -71,14 +73,18 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 		return repositorytests.PublishReady(parent, repositorytests.Ready{Version: repositorytests.ReadyVersion, PodUID: *uid, SourceSHA: *source, TreeSHA256: *tree})
 	}
 	if args[0] == "import" {
-		b, e := workspacebundle.ReadVerified(input, *digest, *source)
+		// Streamed: the helper holds the paths and one file, never the whole
+		// bundle, so its memory does not grow with the repository.
+		summary, e := workspacebundle.ImportFrom(parent, input, *digest, *source)
 		if e != nil {
-			return e
-		}
-		if workspacebundle.Import(parent, b) != nil {
+			// A refusal can come before stdin is read (an existing
+			// repository) or midway. Drain the rest, bounded, as the earlier
+			// read-everything-first helper did, so the exec client never
+			// blocks writing stdin to a helper that already exited.
+			io.Copy(io.Discard, io.LimitReader(input, workspacebundle.MaxWireBytes+1))
 			return workspacebundle.ErrInvalid
 		}
-		return json.NewEncoder(output).Encode(map[string]any{"imported": true, "files": len(b.Files), "sourceSHA": *source, "bundleSHA256": *digest})
+		return json.NewEncoder(output).Encode(map[string]any{"imported": true, "files": summary.Files, "sourceSHA": *source, "bundleSHA256": *digest})
 	}
 	if args[0] == "review" {
 		raw, e := reviewresult.Read(filepath.Join(filepath.Dir(parent), "review-state"))
@@ -88,17 +94,17 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 		_, e = output.Write(raw)
 		return e
 	}
-	b, e := workspacebundle.Export(parent, *source)
-	if e != nil {
+	// Streamed one file at a time; a refusal reason is found before the first
+	// byte, and any later failure exits nonzero so the partial output is void.
+	buffered := bufio.NewWriterSize(output, 256*1024)
+	if e := workspacebundle.ExportTo(parent, *source, buffered); e != nil {
 		return e
 	}
-	raw, e := workspacebundle.Encode(b)
-	if e != nil {
-		return e
-	}
-	_, e = output.Write(raw)
-	return e
+	return buffered.Flush()
 }
+
+const helperMemoryLimit = 48 << 20
+
 func bounded(ctx context.Context, invoke func() error) error {
 	done := make(chan error, 1)
 	go func() { done <- invoke() }()
@@ -122,6 +128,11 @@ func main() {
 		<-ctx.Done()
 		return
 	}
+	// A soft limit below the smallest container limit this helper runs in
+	// (the 64Mi transfer sidecar): the streamed import, export and tree check
+	// keep at most about 40 MiB live, and the collector runs before garbage
+	// could reach the container limit.
+	debug.SetMemoryLimit(helperMemoryLimit)
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	err := bounded(ctx, func() error {

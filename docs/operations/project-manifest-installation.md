@@ -288,11 +288,13 @@ The worker then runs with:
   `/usr/local/go/bin/go`) relocated the same way, in the command and the
   prompt. A relative command such as `go test ./...` is unchanged, and the
   verifier always runs the manifest's own command and environment;
-- 512 MiB more memory (a 1,280 MiB limit) and a 2,560 MiB ephemeral-storage
+- 512 MiB more memory (a 1,280 MiB limit) and a 3,072 MiB ephemeral-storage
   limit, which covers the three disk volumes (1,280 + 1,024 + 128 MiB) and
-  the worker's own 128 MiB, so the kubelet evicts the pod predictably if they
-  fill. Kubernetes sets each request to its limit, so the scheduler reserves
-  per pod 2,560 MiB (worker) + 128 MiB (mailbox) of ephemeral storage, and
+  the worker's own 640 MiB (128 MiB plus the 512 MiB disk-backed workspace,
+  see [Large repositories](large-repositories.md)), so the kubelet evicts the
+  pod predictably if they fill. Kubernetes sets each request to its limit, so
+  the scheduler reserves per pod 3,072 MiB (worker) + 128 MiB (mailbox) of
+  ephemeral storage, and
   128 MiB for each init container while it runs. The executor quota does not
   bound ephemeral storage;
 - a prompt that names the manifest's test command and its directory, and

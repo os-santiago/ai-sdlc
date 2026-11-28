@@ -31,7 +31,7 @@ type TestsRun struct {
 	run       string
 	sourceSHA string
 	treeSHA   string
-	source    []byte
+	tree      workspacebundle.Bundle
 	timeout   time.Duration
 	analysis  time.Duration // the run's analysis commands, 0 without
 	services  time.Duration // the longest service readiness wait, 0 without
@@ -43,24 +43,39 @@ type TestsRun struct {
 // PlanTestsRun compiles the run and checks, before any effect, that source is
 // a valid bundle of exactly the pod's source revision and tree.
 func PlanTestsRun(client *Client, p repositorytests.Pod, admission RuntimeClassAdmission, source []byte, expires time.Time) (*TestsRun, error) {
-	if client == nil || client.http == nil || client.config == nil || p.Namespace != VerifierNamespace ||
-		len(source) == 0 || len(source) > workspacebundle.MaxWireBytes || !time.Now().Before(expires) {
+	if len(source) == 0 || len(source) > workspacebundle.MaxWireBytes {
 		return nil, ErrTransport
 	}
-	source = append([]byte(nil), source...)
 	bundle, err := workspacebundle.ReadVerified(bytes.NewReader(source), workspacebundle.Digest(source), p.SourceSHA)
 	if err != nil {
 		return nil, ErrTransport
 	}
-	if tree, err := bundle.TreeDigest(); err != nil || tree != p.TreeSHA256 {
+	return PlanTestsRunTree(client, p, admission, bundle, expires)
+}
+
+// PlanTestsRunTree is PlanTestsRun for a decoded tree. The run keeps tree,
+// sharing its file bytes with the caller, who must not modify them, and
+// encodes it only while importing: three runs over one source hold the
+// source once instead of three wire encodings.
+func PlanTestsRunTree(client *Client, p repositorytests.Pod, admission RuntimeClassAdmission, tree workspacebundle.Bundle, expires time.Time) (*TestsRun, error) {
+	if client == nil || client.http == nil || client.config == nil || p.Namespace != VerifierNamespace || !time.Now().Before(expires) || tree.SourceSHA != p.SourceSHA {
 		return nil, ErrTransport
 	}
+	if digest, err := tree.TreeDigest(); err != nil || digest != p.TreeSHA256 {
+		return nil, ErrTransport
+	}
+	if _, err := workspacebundle.EncodedSize(tree); err != nil {
+		return nil, ErrTransport
+	}
+	files := make([]workspacebundle.File, len(tree.Files))
+	copy(files, tree.Files)
+	tree = workspacebundle.Bundle{Version: tree.Version, SourceSHA: tree.SourceSHA, Files: files}
 	w, err := repositorytests.CompilePod(p)
 	if err != nil {
 		return nil, ErrTransport
 	}
 	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace, RuntimeClass: p.RuntimeClass, Admission: admission}, expires: expires},
-		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, runs: repositorytests.Repetitions(p.Run, p.Verification),
+		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, tree: tree, runs: repositorytests.Repetitions(p.Run, p.Verification),
 		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second,
 		services: time.Duration(p.Verification.ServiceReadySeconds()) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
@@ -308,25 +323,30 @@ func (t *TestsRun) Import(ctx context.Context, uid string) error {
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add((repositorytests.ReadySeconds-30)*time.Second), t.resources.expires))
 	defer cancel()
 	session := &Session{client: t.resources.client, expected: t.resources.pod, identity: modelmailbox.Identity{Attempt: "repository-tests", PodUID: uid}, expires: t.resources.expires, helper: "transfer"}
-	digest := workspacebundle.Digest(t.source)
+	// The wire encoding exists only for this exchange.
+	source, err := workspacebundle.Encode(t.tree)
+	if err != nil {
+		return testsFailure("import-encode", ErrTransport)
+	}
+	digest := workspacebundle.Digest(source)
 	raw, code, err := session.exchangeFixed(ctx, helperOperation{
 		command:    []string{"/workspace-transfer", "import", "--pod-uid", uid, "--source-sha", t.sourceSHA, "--digest", digest},
 		inputLimit: workspacebundle.MaxWireBytes, outputLimit: 2048, frames: 1024, timeout: 30 * time.Second, stdin: true,
-	}, t.source)
+	}, source)
+	source = nil
 	if err != nil {
 		return testsFailure(exchangeStep("import-transfer", ctx, err), ErrTransport)
 	}
 	if code != 0 {
 		return testsFailure("import-exit", ErrTransport)
 	}
-	bundle, _ := workspacebundle.Decode(t.source)
 	var receipt struct {
 		Imported     *bool   `json:"imported"`
 		Files        *int    `json:"files"`
 		SourceSHA    *string `json:"sourceSHA"`
 		BundleSHA256 *string `json:"bundleSHA256"`
 	}
-	if authority.DecodeStrict(raw, &receipt) != nil || receipt.Imported == nil || !*receipt.Imported || receipt.Files == nil || *receipt.Files != len(bundle.Files) ||
+	if authority.DecodeStrict(raw, &receipt) != nil || receipt.Imported == nil || !*receipt.Imported || receipt.Files == nil || *receipt.Files != len(t.tree.Files) ||
 		receipt.SourceSHA == nil || *receipt.SourceSHA != t.sourceSHA || receipt.BundleSHA256 == nil || *receipt.BundleSHA256 != digest {
 		return testsFailure("import-receipt", ErrTransport)
 	}
@@ -452,7 +472,7 @@ func exchangeStep(step string, ctx context.Context, err error) string {
 	return step + "-request"
 }
 
-var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress|service)$|^(import-(repeat|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
+var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress|service)$|^(import-(repeat|encode|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
 
 // TestsStep returns the failed repository-tests step, or "" for any other
 // error.

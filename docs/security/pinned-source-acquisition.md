@@ -42,9 +42,9 @@ when they differ from the reported Git tree. There is no silent partial checkout
 | Connection / TLS handshake / response headers | 3 / 3 / 5 seconds |
 | Response headers / archive redirect URL | 8 KiB / 4 KiB |
 | Commit JSON / recursive tree JSON | 1 MiB / 8 MiB |
-| Compressed archive / expanded tar | 32 MiB each |
-| Workspace content / individual file | 16 MiB / 4 MiB |
-| Files / filesystem nodes / path depth | 4,096 / 8,192 / 32 |
+| Compressed archive / expanded tar | 96 MiB / 161 MiB |
+| Workspace content / individual file | 128 MiB / 4 MiB |
+| Files / filesystem nodes / path depth | 16,384 / 32,768 / 32 |
 
 The client uses verified TLS 1.2 or later, fresh HTTP/1 connections, no ambient
 proxy, automatic redirects, compression or retry. Errors are fixed and exclude
@@ -52,6 +52,13 @@ credentials, response bodies and signed archive ticket URLs. The API bearer is
 never copied to the archive request. Archive tickets remain only in memory.
 Private repositories require a separately scoped read credential; the real
 validation here covers public Homedir only, not private-repository ticket flows.
+
+The archive is decompressed and parsed as it arrives: neither the compressed
+archive nor the tar stream is held in memory, only the bundle being built. Each
+bound is counted on the stream, the gzip checksum is verified at the end of its
+single member, and any byte after it is refused. The expanded bound is the
+content bound plus 1 KiB per node and 1 MiB for headers and padding; see
+[Large repositories](../operations/large-repositories.md).
 
 Archive validation rejects traversal, Git metadata, links, devices, sparse or
 unsupported nodes, duplicate/file-directory conflicts and special file modes.

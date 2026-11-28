@@ -42,7 +42,7 @@ def source_bundle(repository, sha):
             raise ValueError('Fixture source must contain regular files only')
         size = int(size)
         total += size
-        if size > 4*1024*1024 or total > 16*1024*1024 or len(files) >= 4096:
+        if size > 4*1024*1024 or total > 128*1024*1024 or len(files) >= 16384:
             raise ValueError('Fixture source exceeds workspace limits')
         data = read('cat-file', 'blob', oid.decode())
         if len(data) != size:
