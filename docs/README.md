@@ -24,6 +24,9 @@ Start here:
   opt-in scheduled backup, checking a backup, and restoring it.
 - [Large repositories](operations/large-repositories.md): the workspace size
   bounds, where a repository's size matters, and its memory and storage cost.
+- [Tekton CI](operations/tekton-ci.md): opt-in, pinned Tekton Pipelines and a
+  reviewed Maven pipeline (`--tekton-ci`), with the design for reporting its
+  result as a required check.
 - [Vulnerability intake](architecture/vulnerability-intake.md): reports from
   any scanner become de-duplicated, AI-SDLC-ready issues through Tekton tasks
   and a validated triage stage.

@@ -1,0 +1,93 @@
+# Fetch exactly one public commit. The revision must be a full 40-character
+# SHA, so a moved branch or a force-pushed pull request cannot change the code
+# that this run tests. No credential is mounted; private repositories are out
+# of scope for this task.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: source-checkout
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    # Tekton copies Task labels to pods; network-policy.yaml selects on it.
+    ai-sdlc.io/ci-egress: fetch
+spec:
+  description: Fetch one immutable commit of a public GitHub repository.
+  params:
+    - name: repository
+      type: string
+      description: GitHub repository as owner/name.
+    - name: revision
+      type: string
+      description: Full 40-character commit SHA.
+  workspaces:
+    - name: output
+      description: Receives the checkout under source/.
+  results:
+    - name: commit
+      description: The verified checked-out commit SHA.
+  volumes:
+    - name: home
+      emptyDir:
+        sizeLimit: 64Mi
+  steps:
+    - name: clone
+      image: docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: home
+          mountPath: /home/ci
+      env:
+        # Parameters reach the script through the environment, never through
+        # script text substitution, so they cannot inject shell syntax.
+        - name: REPOSITORY
+          value: $(params.repository)
+        - name: REVISION
+          value: $(params.revision)
+        - name: DESTINATION
+          value: $(workspaces.output.path)/source
+        - name: RESULT
+          value: $(results.commit.path)
+        - name: HOME
+          value: /home/ci
+        - name: GIT_CONFIG_NOSYSTEM
+          value: "1"
+        - name: GIT_TERMINAL_PROMPT
+          value: "0"
+      script: |
+        #!/bin/sh
+        set -eu
+        # Whole-value match: grep -x matches lines, so refuse a newline first.
+        matches() { case "$1" in *"
+        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
+        matches "$REPOSITORY" '[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}' \
+          || { echo 'repository must be owner/name' >&2; exit 2; }
+        case "/$REPOSITORY/" in */./*|*/../*) echo 'repository must be owner/name' >&2; exit 2;; esac
+        matches "$REVISION" '[0-9a-f]{40}' \
+          || { echo 'revision must be a full lowercase commit SHA' >&2; exit 2; }
+        rm -rf "$DESTINATION"
+        git init -q "$DESTINATION"
+        cd "$DESTINATION"
+        git -c protocol.version=2 fetch -q --depth 1 --no-tags \
+          "https://github.com/$REPOSITORY.git" "$REVISION"
+        git -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+        actual="$(git rev-parse HEAD)"
+        [ "$actual" = "$REVISION" ] || { echo "checked out $actual, expected $REVISION" >&2; exit 1; }
+        printf '%s' "$actual" > "$RESULT"
+        echo "Checked out $REPOSITORY at $actual"

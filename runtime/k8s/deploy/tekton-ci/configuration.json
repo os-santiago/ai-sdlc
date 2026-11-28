@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "configMaps": {
+    "tekton-pipelines/feature-flags": {
+      "coschedule": "pipelineruns",
+      "disable-creds-init": "true",
+      "disable-inline-spec": "pipeline,pipelinerun,taskrun",
+      "enable-api-fields": "stable",
+      "send-cloudevents-for-runs": "false",
+      "set-security-context": "true",
+      "set-security-context-read-only-root-filesystem": "true"
+    },
+    "tekton-pipelines-resolvers/resolvers-feature-flags": {
+      "enable-bundles-resolver": "false",
+      "enable-cluster-resolver": "false",
+      "enable-git-resolver": "false",
+      "enable-http-resolver": "false",
+      "enable-hub-resolver": "false"
+    }
+  }
+}

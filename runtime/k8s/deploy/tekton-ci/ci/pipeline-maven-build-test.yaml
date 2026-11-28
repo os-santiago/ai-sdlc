@@ -1,0 +1,63 @@
+# Check out one immutable commit, then build and test one Maven module
+# offline. Runs are available locally (tools/tekton_ci_run.py,
+# internal/tektontasks); publishing a run as a GitHub check, so that it can be
+# a required check, is planned work and not part of this pipeline.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ai-sdlc-maven-build-test
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Check out a commit at an immutable SHA and run mvn verify offline for one module.
+  params:
+    - name: repository
+      type: string
+    - name: revision
+      type: string
+    - name: module
+      type: string
+      default: "."
+    - name: services
+      type: string
+      default: none
+    - name: maven-args
+      type: array
+      default: []
+  workspaces:
+    - name: source
+    - name: maven-cache
+  tasks:
+    - name: checkout
+      taskRef:
+        name: source-checkout
+      params:
+        - name: repository
+          value: $(params.repository)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: source
+    - name: build-test
+      runAfter: [checkout]
+      taskRef:
+        name: maven-build-test
+      params:
+        - name: module
+          value: $(params.module)
+        - name: services
+          value: $(params.services)
+        - name: maven-args
+          value: ["$(params.maven-args[*])"]
+      workspaces:
+        - name: source
+          workspace: source
+        - name: maven-cache
+          workspace: maven-cache
+  results:
+    - name: commit
+      value: $(tasks.checkout.results.commit)
+    - name: summary
+      value: $(tasks.build-test.results.summary)
