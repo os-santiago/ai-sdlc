@@ -129,7 +129,19 @@ def node_pid_limit(read):
     return int(value)
 
 
-def sandbox_task_limit(read, write, command, node_exec):
+def tasks_share(desired):
+    """The DefaultTasksMax share of the reviewed drop-in, in permyriad."""
+    value = next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax='))
+    whole, _, fraction = value.removesuffix('%').partition('.')
+    if not value.endswith('%') or not whole.isdigit() or len(fraction) > 2 or (fraction and not fraction.isdigit()):
+        raise ValueError('The reviewed task limit must be a percentage of the node pid limit')
+    share = int(whole) * 100 + int(fraction.ljust(2, '0') or 0)
+    if not 0 < share < 5000:
+        raise ValueError('The reviewed task limit must stay below half of the node pid limit')
+    return share
+
+
+def sandbox_task_limit(read, write, command, node_exec, minimum=None):
     """Make the node's per-scope task limit fit sandboxed pods, idempotently.
 
     gVisor runs every container of a pod (the sandbox, gofers and systrap
@@ -137,20 +149,26 @@ def sandbox_task_limit(read, write, command, node_exec):
     each container scope at DefaultTasksMax, 15% of the node's pid limit
     (307 for a kind node under podman's default of 2048). A Tekton task pod
     with three or more containers exceeded it and the sandbox died with
-    "failed to create new OS thread". The reviewed drop-in sets the value
-    measured for a sandboxed Maven build (603 tasks) plus a margin. It only
-    ever raises the default: a node without a pid limit (docker) already has
-    a larger default and gets no drop-in. The value must stay at or below half
-    the node's pid limit. An earlier ai-sdlc drop-in is replaced (upgrade or
-    change); a foreign one is refused. It applies to every container scope
-    created afterwards, sandboxed or not; every pod is also bounded by the
-    kubelet podPidsLimit (pod_pid_limit).
+    "failed to create new OS thread". The reviewed drop-in sets a share of the
+    node's pid limit (37.5%), so the value follows the node container's limit
+    (tools/kind_nodes.py) instead of a number sized for one node size: 768 at
+    2048, 3072 at 8192. systemd resolves the share against the current limit,
+    so a later `podman update --pids-limit` moves it without a re-exec. The
+    resolved value must be at least the kubelet podPidsLimit (minimum), so a
+    sandboxed pod is bounded by its pod limit; a smaller node is refused. A
+    node without a pid limit (docker without one) already has a larger
+    default and gets no drop-in. An earlier ai-sdlc drop-in is replaced
+    (upgrade or change); a foreign one is refused. It applies to every
+    container scope created afterwards, sandboxed or not; every pod is also
+    bounded by the kubelet podPidsLimit (pod_pid_limit).
     """
     desired = (MANIFESTS / 'systemd-tasks.conf').read_text()
-    expected = int(next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax=')))
+    share = tasks_share(desired)
+    if minimum is None:
+        minimum = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
     limit = node_pid_limit(read)
-    if limit is not None and expected * 2 > limit:
-        raise ValueError('The kind node pid limit is too small for sandboxed pods')
+    if limit is not None and limit * share // 10000 < minimum:
+        raise ValueError('The kind node pid limit is too small for sandboxed pods; raise --node-pids-limit')
     current = read(TASKS_DROPIN)
     if current is not None and not current.startswith(DROPIN_MARK):
         raise ValueError('Conflicting systemd task limit drop-in on the kind node')
@@ -159,17 +177,19 @@ def sandbox_task_limit(read, write, command, node_exec):
         value = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
         return None if value == 'infinity' else int(value)
     observed = shown()
-    if current is None and (observed is None or observed >= expected):
-        return observed if observed is not None else limit
+    if current is None and limit is None and (observed is None or observed >= minimum):
+        return observed
+    # systemd floors the share of the limit (pids.max or, unlimited, pid_max).
+    expected = None if limit is None else limit * share // 10000
     if current != desired:
         command(node_exec + ['mkdir', '-p', '/etc/systemd/system.conf.d'])
         write(TASKS_DROPIN, desired)
-    if observed != expected:
+    if current != desired or (expected is not None and observed != expected):
         # Re-executing the manager applies the default to scopes created
         # afterwards; running containers keep their limits.
         command(node_exec + ['systemctl', 'daemon-reexec'])
         observed = shown()
-    if observed != expected:
+    if observed is None or observed < minimum or (expected is not None and observed != expected):
         raise ValueError('The kind node did not apply the sandbox task limit')
     return observed
 

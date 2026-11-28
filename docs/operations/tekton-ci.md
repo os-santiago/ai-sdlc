@@ -280,13 +280,16 @@ offline runtime) now sets two node limits:
 
 - **Per-scope tasks:** a reviewed systemd drop-in
   (`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
-  `DefaultTasksMax=768`) sized from the measured peak of a sandboxed Maven
-  build-test (603 tasks) plus a 27% margin. It re-executes the node's systemd
-  manager, verifies the value and records `scopeTasksMax` in its report. It
-  only ever raises the default: a node without a pid limit (docker) keeps its
-  larger default and gets no drop-in. It refuses a node whose pid limit is
-  below twice the value, and a drop-in that ai-sdlc did not write. **It applies
-  to every container scope created afterwards, sandboxed or not.**
+  `DefaultTasksMax=37.5%`): a share of the node container's pid limit, so it
+  follows that limit (768 at 2,048, 3,072 at the installer default of 8,192;
+  see [kind node resources](kind-node-resources.md)). The sandboxed Maven
+  build-test peaked at 603 tasks. It re-executes the node's systemd manager,
+  verifies the resolved value and records `scopeTasksMax` in its report. A
+  node without a pid limit keeps its larger default and gets no drop-in. It
+  refuses a node where the share is below the kubelet `podPidsLimit`, and a
+  drop-in that ai-sdlc did not write; an earlier ai-sdlc drop-in (such as the
+  fixed 768) is replaced. **It applies to every container scope created
+  afterwards, sandboxed or not.**
 - **Per-pod pids:** the kubelet `podPidsLimit` (768, `kubelet-pods.json`), in
   `deploy/local/kind.yaml` for new clusters and added to an existing node's
   kubelet configuration atomically: the installer stages the file, checks it is
@@ -299,7 +302,9 @@ offline runtime) now sets two node limits:
 - **CI concurrency:** candidate code runs only in `build-test` pods, which
   admission requires to carry the `ai-sdlc-ci-candidate` PriorityClass (value
   0, never preempts). Two ResourceQuotas scoped by that class allow one
-  candidate pod and one other (fetch) pod at a time; Tekton retries a task pod
+  candidate pod and one other (fetch) pod at a time by default
+  (`--tekton-ci-candidate-pods` and `--tekton-ci-fetch-pods` raise them; the
+  installer checks them against the node pid budget); Tekton retries a task pod
   refused by a quota until a pod ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
   with it, each run held an assistant pod, and two concurrent runs took the
   whole quota while their task pods stayed pending, a deadlock observed in the
@@ -309,7 +314,10 @@ offline runtime) now sets two node limits:
   (`releasedAssistants` in its report) and keeps those of runs still in
   progress.
 
-The arithmetic for a podman kind node (2,048 pids), with the node's own
+The installer now sets the node container's pid limit (8,192 by default) and
+checks this budget for the configured quotas; see
+[kind node resources](kind-node-resources.md). The original arithmetic for a
+podman kind node (2,048 pids), with the node's own
 baseline measured on the existing kind nodes (about 560 pids idle, a peak near
 1,100): baseline peak 1,100 + one candidate pod at its 768 limit + one fetch
 pod (trusted inputs; a Maven pod with tests peaked at 146, so about 150) =

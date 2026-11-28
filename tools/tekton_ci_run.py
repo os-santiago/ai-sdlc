@@ -391,8 +391,9 @@ def main(argv=None):
     kubectl = connect(args.cluster)
     if 'taskRunSpecs' in rendered['spec']:
         require_runtime_class(kubectl, args.runtime_class)
-        conf = (ROOT / 'runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf').read_text()
-        sandbox_ready(args.cluster, int(next(l.split('=', 1)[1] for l in conf.splitlines() if l.startswith('DefaultTasksMax='))))
+        # The scope limit must reach the pod limit, so the pod bound is what holds.
+        pods = json.loads((ROOT / 'runtime/k8s/deploy/local/offline-runtime/kubelet-pods.json').read_text())
+        sandbox_ready(args.cluster, pods['podPidsLimit'])
     result = run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered), capture_output=True, check=False)
     if result.returncode != 0:
         # The rendered run carries no credential; show the API's reason (for

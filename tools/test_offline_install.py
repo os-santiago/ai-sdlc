@@ -155,17 +155,27 @@ class SandboxTaskLimitTests(unittest.TestCase):
     def test_drop_in_is_written_once_and_applied_with_a_reexec(self):
         files, calls, read, write, command = self.fake()
         self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 768)
-        self.assertIn('DefaultTasksMax=768', files[runtime.TASKS_DROPIN])
+        self.assertIn('DefaultTasksMax=37.5%', files[runtime.TASKS_DROPIN])
         self.assertIn(['podman', 'exec', 'n', 'systemctl', 'daemon-reexec'], calls)
         files2, calls2, read2, write2, command2 = self.fake(existing=self.desired(), reported=('768',))
         self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 768)
         self.assertFalse(any('daemon-reexec' in c for c in calls2), 'reapplication changes nothing')
 
+    def test_the_value_follows_the_node_pid_limit(self):
+        # 37.5% of the installer default node limit, not a number sized for 2048.
+        files, calls, read, write, command = self.fake(pids_max='8192', reported=('1228', '3072'))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 3072)
+        # A node raised after the drop-in: systemd already resolves the share again.
+        files, calls, read, write, command = self.fake(existing=self.desired(), pids_max='16384', reported=('6144',))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 6144)
+        self.assertFalse(any('daemon-reexec' in c for c in calls))
+
     def test_an_earlier_ai_sdlc_value_is_replaced(self):
-        files, calls, read, write, command = self.fake(existing=runtime.DROPIN_MARK + ' old\n[Manager]\nDefaultTasksMax=1536\n',
-                                                       reported=('1536', '768'))
-        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 768)
+        files, calls, read, write, command = self.fake(existing=runtime.DROPIN_MARK + ' old\n[Manager]\nDefaultTasksMax=768\n',
+                                                       pids_max='8192', reported=('768', '3072'))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 3072)
         self.assertEqual(files[runtime.TASKS_DROPIN], self.desired())
+        self.assertIn(['podman', 'exec', 'n', 'systemctl', 'daemon-reexec'], calls)
 
     def test_a_node_without_pid_limit_is_never_lowered(self):
         # Docker kind nodes have no pid limit and a far larger systemd default.
@@ -181,12 +191,18 @@ class SandboxTaskLimitTests(unittest.TestCase):
         _, calls, read, write, command = self.fake(existing='[Manager]\nDefaultTasksMax=infinity\n')
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
-        _, _, read, write, command = self.fake(pids_max='1500')  # below 2 x 768
+        _, _, read, write, command = self.fake(pids_max='2000')  # 37.5% is below the 768 pod limit
         with self.assertRaisesRegex(ValueError, 'too small'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
         _, _, read, write, command = self.fake(reported=('307', '307'))
         with self.assertRaisesRegex(ValueError, 'did not apply'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
+
+    def test_the_share_is_a_bounded_percentage(self):
+        self.assertEqual(runtime.tasks_share('[Manager]\nDefaultTasksMax=37.5%\n'), 3750)
+        for value in ('768', '50%', '0%', '12.345%', 'x%'):
+            with self.assertRaises(ValueError):
+                runtime.tasks_share('[Manager]\nDefaultTasksMax=' + value + '\n')
 
     @staticmethod
     def moving(files, command):
@@ -242,9 +258,11 @@ class SandboxTaskLimitTests(unittest.TestCase):
         self.assertEqual(sum(1 for c in calls if c[3:] == ['systemctl', 'restart', 'kubelet']), 2)
 
     def test_limits_are_bounded_and_kind_config_matches(self):
-        value = int(next(l.split('=')[1] for l in self.desired().splitlines() if l.startswith('DefaultTasksMax=')))
-        self.assertTrue(603 < value <= 768, 'above the measured sandbox peak (603), well below a 2048 node')
+        share = runtime.tasks_share(self.desired())
         pods = json.loads((runtime.MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
+        self.assertTrue(603 < pods, 'above the measured sandbox peak (603)')
+        self.assertEqual(2048 * share // 10000, pods, 'the smallest supported node (2048) still reaches the pod limit')
+        self.assertLess(share, 5000, 'no scope may take half of the node')
         self.assertIn('podPidsLimit: %d' % pods, (runtime.MANIFESTS.parent / 'kind.yaml').read_text())
 
 

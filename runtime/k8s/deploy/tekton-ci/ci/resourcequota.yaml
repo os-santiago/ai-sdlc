@@ -1,19 +1,23 @@
 # Pod-count bounds in the CI namespace, so CI pods stay within the kind node's
-# pid limit (2048 under podman) next to the node's own baseline:
+# pid limit next to the node's own baseline. The pods values below are the
+# defaults; ./install.sh local --tekton-ci-candidate-pods/--tekton-ci-fetch-pods
+# sets them and refuses counts the node pid budget cannot hold
+# (tools/kind_nodes.py, runtime/k8s/deploy/local/node-resources.json):
 #
 #   measured node peak without CI  ~1100 pids
-#   one candidate-code pod          768 (kubelet podPidsLimit; sandboxed
+#   one verification run           3 x 768 (candidate or verification profile)
+#   each candidate-code pod         768 (kubelet podPidsLimit; sandboxed
 #                                        build-test measured at 603)
-#   one fetch pod                  ~150 (trusted inputs only: checkout,
+#   each fetch pod                 ~150 (trusted inputs only: checkout,
 #                                        maven-dependencies on the base head,
 #                                        npm with scripts disabled; a Maven
 #                                        pod with tests measured at 146)
-#   total                          ~2018 of 2048
+#   defaults                       ~4322 of the installer's 8192 node limit
 #
 # Candidate code runs only in build-test pods, which carry the
-# ai-sdlc-ci-candidate PriorityClass (admission requires it); at most one runs
-# at a time. Every other CI pod is a fetch pod, also one at a time. Tekton
-# keeps a refused task pod pending and creates it when a pod ends.
+# ai-sdlc-ci-candidate PriorityClass (admission requires it). Every other CI
+# pod is a fetch pod. Tekton keeps a refused task pod pending and creates it
+# when a pod ends.
 apiVersion: v1
 kind: ResourceQuota
 metadata:

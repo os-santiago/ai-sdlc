@@ -52,6 +52,11 @@ Reference measurements on the sample repositories are in
 - **Merge rule ID.** The first run creates the native merge rule on GitHub,
   then stops and prints its ID. Set `merge.rulesetID` in the manifest to it
   and run the same command again.
+- **Node resources.** On kind, the installer sets each node container's pid
+  limit (8,192 by default, `--node-pids-limit`) and can cap its memory and
+  CPUs (`--node-memory`, `--node-cpus`, off by default). It refuses a pid
+  limit that cannot hold one verification run and the Tekton CI quotas; see
+  [kind node resources](operations/kind-node-resources.md).
 - **One repository per cluster.** The installer refuses to change the
   repository of an existing installation. To try another repository, use
   another `--cluster` name.
