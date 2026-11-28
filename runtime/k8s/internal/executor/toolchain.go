@@ -31,7 +31,7 @@ const (
 	ToolchainMount     = "/toolchain"
 	ToolchainDirectory = ToolchainMount + "/root"
 	// ScratchDirectory is the worker's disk-backed scratch volume: TMPDIR
-	// and the build cache, outside the memory-backed workspace.
+	// and the build cache, outside the workspace.
 	ScratchDirectory = "/scratch"
 	// ToolchainStartSeconds is the start time a toolchain workload adds to
 	// the Pending phase and to every deadline that covers it: pulling the
@@ -51,8 +51,17 @@ const (
 	scratchVolume    = "1Gi"
 	runnerVolume     = "128Mi"
 	toolchainMemory  = "1280Mi" // the original 768Mi worker limit plus 512Mi
-	toolchainStorage = "2560Mi" // 128Mi + toolchain + scratch + runner volumes
+	toolchainStorage = "3072Mi" // workerStorage + toolchain + scratch + runner volumes
 	baseSearchPath   = "/usr/local/bin:/usr/bin:/bin"
+
+	// WorkspaceVolume is the disk-backed workspace: room for a repository
+	// at the bundle limit (128 MiB of content, 32,768 nodes) and as much
+	// again for the agent's changes and build output. workerStorage is the
+	// worker's ephemeral-storage limit: its own 128Mi plus the workspace,
+	// because the kubelet evicts a pod whose disk use, volumes included,
+	// exceeds the sum of its container limits.
+	WorkspaceVolume = "512Mi"
+	workerStorage   = "640Mi"
 )
 
 // Names of the init containers of a toolchain workload, in order.

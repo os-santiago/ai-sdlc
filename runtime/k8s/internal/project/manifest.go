@@ -69,6 +69,10 @@ type Verification struct {
 	// Analysis is optional static analysis, omitted when absent so manifests
 	// without it keep their canonical form, digest and verifier settings.
 	Analysis *Analysis `json:"analysis,omitempty"`
+	// Dependencies is an optional read-only dependency cache, omitted when
+	// absent so manifests without it keep their canonical form, digest and
+	// verifier settings. See dependencies.go.
+	Dependencies *Dependencies `json:"dependencies,omitempty"`
 	// Services are optional backing services the tests reach over the pod's
 	// loopback (see Service). Omitted when absent, so manifests without
 	// them keep their canonical form, digest and verifier settings.
@@ -630,6 +634,9 @@ func (v Verification) validate() error {
 	if v.Analysis != nil && v.Analysis.validate(v.WorkingDir) != nil {
 		return ErrManifest
 	}
+	if v.Dependencies != nil && v.Dependencies.validate() != nil {
+		return ErrManifest
+	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {
 		return ErrManifest
 	}
@@ -707,7 +714,9 @@ func (v Verification) MatchesHarness(file string) bool {
 			return true
 		}
 	}
-	return false
+	// The files that define the dependency set are always harness: the
+	// cache was filled, with network access, from the base revision's.
+	return v.MatchesDependencies(file)
 }
 
 // MatchesTest reports whether a path is one of the repository's test files.

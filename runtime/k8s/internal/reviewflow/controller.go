@@ -15,7 +15,6 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 type ControllerError struct {
@@ -230,12 +229,13 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		if e != nil {
 			return "", "", e
 		}
-		tree, e := workspacebundle.Decode(exported.Bytes())
+		// Inspected in place: no copy and no decoded tree.
+		tree, e := exported.Summary()
 		if e != nil {
 			return "", "", e
 		}
-		digest, e := tree.TreeDigest()
-		if e != nil || tree.SourceSHA != p.command.SourceSHA || digest != p.tree {
+		digest := tree.TreeDigest
+		if tree.SourceSHA != p.command.SourceSHA || digest != p.tree {
 			return "", "", ErrReview
 		}
 		summary, e = session.ExportReview(ctx)

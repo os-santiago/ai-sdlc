@@ -1,7 +1,6 @@
 package podtransport
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"regexp"
@@ -21,6 +20,15 @@ type Candidate struct {
 
 func (c Candidate) Bytes() []byte         { return append([]byte(nil), c.raw...) }
 func (c Candidate) WorkerExitCode() int32 { return c.exitCode }
+
+// Summary inspects the candidate in place, without the copy Bytes makes: its
+// tree digest, file count and named source commit, all untrusted.
+func (c Candidate) Summary() (workspacebundle.Summary, error) { return workspacebundle.Inspect(c.raw) }
+
+// exportFrames bounds the WebSocket messages of one export that carry no
+// bytes. Messages with data are bounded by MaxWireBytes itself, so no
+// minimum chunk size is assumed for the API server's relay.
+const exportFrames = 8192
 
 // WorkerExit observes only the originally bound worker instance. It invokes no
 // helper and does not make a candidate trustworthy or grant execution authority.
@@ -60,14 +68,12 @@ func (s *Session) ImportSource(ctx context.Context, source []byte) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
+	// The private copy is the exact bytes inspected and sent. Inspect
+	// validates them as Decode does and binds the tree without a decoded copy.
 	source = append([]byte(nil), source...)
 	digest := workspacebundle.Digest(source)
-	bundle, err := workspacebundle.ReadVerified(bytes.NewReader(source), digest, s.sourceSHA)
-	if err != nil {
-		return ErrTransport
-	}
-	tree, err := bundle.TreeDigest()
-	if err != nil || tree != s.treeSHA {
+	summary, err := workspacebundle.Inspect(source)
+	if err != nil || summary.SourceSHA != s.sourceSHA || summary.TreeDigest != s.treeSHA {
 		return ErrTransport
 	}
 	if _, err = s.observe(withReadReserve(ctx, 30*time.Second+readAttemptBound), false); err != nil {
@@ -89,7 +95,7 @@ func (s *Session) ImportSource(ctx context.Context, source []byte) error {
 		SourceSHA    *string `json:"sourceSHA"`
 		BundleSHA256 *string `json:"bundleSHA256"`
 	}
-	if authority.DecodeStrict(raw, &receipt) != nil || receipt.Imported == nil || !*receipt.Imported || receipt.Files == nil || *receipt.Files != len(bundle.Files) || receipt.SourceSHA == nil || *receipt.SourceSHA != s.sourceSHA || receipt.BundleSHA256 == nil || *receipt.BundleSHA256 != digest {
+	if authority.DecodeStrict(raw, &receipt) != nil || receipt.Imported == nil || !*receipt.Imported || receipt.Files == nil || *receipt.Files != summary.Files || receipt.SourceSHA == nil || *receipt.SourceSHA != s.sourceSHA || receipt.BundleSHA256 == nil || *receipt.BundleSHA256 != digest {
 		return ErrTransport
 	}
 	_, err = s.observe(ctx, false)
@@ -143,7 +149,7 @@ func (s *Session) ExportCandidate(ctx context.Context) (Candidate, error) {
 	}
 	raw, code, err := s.exchangeFixed(ctx, helperOperation{
 		command:     []string{"/workspace-transfer", "export", "--pod-uid", s.identity.PodUID, "--source-sha", s.sourceSHA},
-		outputLimit: workspacebundle.MaxWireBytes, frames: 8192, timeout: 30 * time.Second,
+		outputLimit: workspacebundle.MaxWireBytes, frames: exportFrames, timeout: 30 * time.Second,
 	}, nil)
 	if err != nil {
 		return Candidate{}, exportFailure("helper-transport", err)
@@ -151,8 +157,8 @@ func (s *Session) ExportCandidate(ctx context.Context) (Candidate, error) {
 	if code != 0 {
 		return Candidate{}, exportFailure(helperExitStep(code), ErrTransport)
 	}
-	bundle, err := workspacebundle.Decode(raw)
-	if err != nil || bundle.SourceSHA != s.sourceSHA {
+	summary, err := workspacebundle.Inspect(raw)
+	if err != nil || summary.SourceSHA != s.sourceSHA {
 		return Candidate{}, exportFailure("decode", ErrTransport)
 	}
 	after, err := s.inspect(ctx, true)

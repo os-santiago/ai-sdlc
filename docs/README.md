@@ -18,10 +18,15 @@ Start here:
   calls and deliveries, and how to scrape them.
 - [Try it](try-it.md) ([detailed](try-it-detailed.md)): label one issue and
   watch it become a merged pull request in the flow console.
+- [Dependency proxy and cache](operations/dependency-cache.md): the in-cluster
+  Maven and npm proxy, proxy-only dependency tasks and the read-only cache
+  offline verification mounts.
 - [Flow console](operations/flow-console.md): a read-only web timeline of the
   autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
   opt-in scheduled backup, checking a backup, and restoring it.
+- [Large repositories](operations/large-repositories.md): the workspace size
+  bounds, where a repository's size matters, and its memory and storage cost.
 - [Tekton CI](operations/tekton-ci.md): opt-in, pinned Tekton Pipelines and a
   reviewed Maven pipeline (`--tekton-ci`), with the design for reporting its
   result as a required check.

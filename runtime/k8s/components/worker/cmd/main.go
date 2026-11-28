@@ -14,12 +14,15 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/memlimit"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 )
 
 func main() {
+	// Large workspace trees: collect before the container limit (internal/memlimit).
+	memlimit.Apply()
 	component, err := bootstrap.Open(context.Background(), "worker")
 	if err != nil {
 		log.Fatal(err)

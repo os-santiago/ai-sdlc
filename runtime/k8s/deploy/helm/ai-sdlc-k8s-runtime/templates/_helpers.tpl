@@ -219,3 +219,20 @@ generation.toolchain object, else nothing. The executor quota uses it.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+dependencyCache renders "true" when project.manifestJSON declares a
+verification.dependencies object, else nothing. The verification controller
+then may read (only read) the sealed dependency cache claims.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.dependencyCache" -}}
+{{- with .Values.project.manifestJSON -}}
+{{- $m := fromJson . -}}
+{{- if or (hasKey $m "Error") (not (hasKey $m "version")) -}}
+{{- fail "project.manifestJSON must be the installer's canonical manifest JSON object" -}}
+{{- end -}}
+{{- if kindIs "map" (get $m "verification") -}}
+{{- if kindIs "map" (get (get $m "verification") "dependencies") -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

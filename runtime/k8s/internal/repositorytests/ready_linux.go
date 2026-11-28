@@ -161,11 +161,10 @@ func VerifyTree(parent, sourceSHA, treeSHA256 string) error {
 	if unix.Fstatat(root, ".git", &st, unix.AT_SYMLINK_NOFOLLOW) != unix.ENOENT || unix.Fstatat(fd, "git", &st, unix.AT_SYMLINK_NOFOLLOW) != unix.ENOENT {
 		return ErrReady
 	}
-	b, e := workspacebundle.Export(parent, sourceSHA)
-	if e != nil {
-		return ErrReady
-	}
-	if digest, e := b.TreeDigest(); e != nil || digest != treeSHA256 {
+	// Hashes one file at a time: the transfer sidecar's memory does not grow
+	// with the repository.
+	summary, e := workspacebundle.ExportSummary(parent, sourceSHA)
+	if e != nil || summary.TreeDigest != treeSHA256 {
 		return ErrReady
 	}
 	return nil

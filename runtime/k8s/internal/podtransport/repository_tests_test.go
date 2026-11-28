@@ -582,3 +582,28 @@ func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 		})
 	}
 }
+
+// An empty tree stays an empty, encodable tree after planning: the copy
+// must not turn its file list into nil.
+func TestPlanTestsRunTreeKeepsAnEmptyTree(t *testing.T) {
+	p, _ := testsFixturePod()
+	server := httptest.NewTLSServer(http.NotFoundHandler())
+	defer server.Close()
+	client, err := NewClient(Config{APIServer: server.URL, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: p.SourceSHA, Files: []workspacebundle.File{}}
+	digest, err := tree.TreeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.TreeSHA256 = digest
+	run, err := PlanTestsRunTree(client, p, RuntimeClassAdmission{}, tree, time.Now().Add(time.Minute))
+	if err != nil || run.tree.Files == nil {
+		t.Fatal("empty tree lost", err)
+	}
+	if _, err := workspacebundle.Encode(run.tree); err != nil {
+		t.Fatal("planned empty tree no longer encodes", err)
+	}
+}

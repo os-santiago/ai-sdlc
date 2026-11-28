@@ -191,11 +191,9 @@ func (c *Client) fetchAttempt(ctx context.Context, sha string) (workspacebundle.
 	if response.Header.Get("Content-Encoding") != "" || response.ContentLength > MaxArchiveBytes {
 		return workspacebundle.Bundle{}, ErrSource, false
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, MaxArchiveBytes+1))
-	if err != nil || len(raw) > MaxArchiveBytes || ctx.Err() != nil {
-		return workspacebundle.Bundle{}, ErrSource, false
-	}
-	b, err := DecodeArchive(raw, sha)
+	// Decoded as it arrives: neither the compressed archive nor its tar
+	// stream is held whole, only the bundle being built.
+	b, err := DecodeArchiveFrom(response.Body, sha)
 	if err != nil || ctx.Err() != nil || manifest.verify(b) != nil {
 		return workspacebundle.Bundle{}, ErrSource, false
 	}

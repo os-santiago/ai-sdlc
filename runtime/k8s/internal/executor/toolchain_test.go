@@ -63,6 +63,17 @@ func TestWorkloadWithoutToolchainIsByteIdenticalToMain(t *testing.T) {
 		if err != nil {
 			t.Fatal(name, err)
 		}
+		// The large-repository bounds changed exactly two fields: the
+		// workspace volume became disk-backed and larger, and the worker's
+		// disk limit covers it. Reverting only those reproduces main.
+		spec := c.workload.Pod["spec"].(map[string]any)
+		volume := spec["volumes"].([]any)[0].(map[string]any)
+		limits := spec["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)["limits"].(map[string]any)
+		if volume["name"] != "workspace" || !reflect.DeepEqual(volume["emptyDir"], map[string]any{"sizeLimit": WorkspaceVolume}) || limits["ephemeral-storage"] != "640Mi" {
+			t.Fatal("unexpected workspace volume or worker disk limit", name)
+		}
+		volume["emptyDir"] = map[string]any{"medium": "Memory", "sizeLimit": "64Mi"}
+		limits["ephemeral-storage"] = "128Mi"
 		raw, _ := json.Marshal(c.workload)
 		if workspacebundle.Digest(c.assignment) != want[0] || workspacebundle.Digest(raw) != want[1] {
 			t.Fatal("workload without a toolchain changed", name)
@@ -123,7 +134,7 @@ func TestToolchainWorkloadCopiesTheRootBeforeTheWorker(t *testing.T) {
 		t.Fatal("worker mounts", mounts)
 	}
 	limits := worker["resources"].(map[string]any)["limits"].(map[string]any)
-	if limits["memory"] != "1280Mi" || limits["ephemeral-storage"] != "2560Mi" || limits["cpu"] != "1" {
+	if limits["memory"] != "1280Mi" || limits["ephemeral-storage"] != "3072Mi" || limits["cpu"] != "1" {
 		t.Fatal("worker limits", limits)
 	}
 	volumes := spec["volumes"].([]any)

@@ -9,6 +9,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 const testSHA = "0622cdaeb59a11a27bd5f3d7e18183c401a5e412"
@@ -120,7 +123,7 @@ func TestArchiveBoundsAndTrailingContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	gz.Close()
-	for name, tail := range map[string][]byte{"expanded-overflow": make([]byte, MaxArchiveBytes), "trailing-junk": []byte("hidden"), "second-tar": expanded} {
+	for name, tail := range map[string][]byte{"expanded-overflow": make([]byte, MaxExpandedArchiveBytes), "trailing-junk": []byte("hidden"), "second-tar": expanded} {
 		t.Run(name, func(t *testing.T) {
 			var output bytes.Buffer
 			writer := gzip.NewWriter(&output)
@@ -132,7 +135,7 @@ func TestArchiveBoundsAndTrailingContent(t *testing.T) {
 			}
 		})
 	}
-	for name, count := range map[string]int{"files": 4097, "directories": 8193} {
+	for name, count := range map[string]int{"files": workspacebundle.MaxFiles + 1, "directories": workspacebundle.MaxNodes + 1} {
 		t.Run(name, func(t *testing.T) {
 			headers := make([]*tar.Header, 0, count)
 			for i := 0; i < count; i++ {
@@ -148,5 +151,101 @@ func TestArchiveBoundsAndTrailingContent(t *testing.T) {
 				t.Fatal("node/file bound ignored")
 			}
 		})
+	}
+}
+
+// largeArchive builds a git-archive-shaped tarball of the measured class:
+// 2000 files in nested modules, about 40 MB, over the earlier 32 MiB
+// expanded-tar and 16 MiB content limits.
+func largeArchive(t *testing.T, level int, files int, size func(int) int) ([]byte, int) {
+	t.Helper()
+	var output bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&output, level)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(gz)
+	if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": testSHA}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: testRoot, Mode: 0775}); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	directories := map[string]bool{}
+	for i := 0; i < files; i++ {
+		dir := fmt.Sprintf("%smodule-%02d/src/main/java/p%03d/", testRoot, i%20, i%150)
+		for d, parent := "", strings.Split(strings.TrimSuffix(strings.TrimPrefix(dir, testRoot), "/"), "/"); len(parent) > 0; parent = parent[1:] {
+			d += parent[0] + "/"
+			if !directories[d] {
+				directories[d] = true
+				if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: testRoot + d, Mode: 0775}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		n := size(i)
+		line := []byte(fmt.Sprintf("class File%04d { /* %d */ }\n", i, i))
+		data := bytes.Repeat(line, n/len(line)+1)[:n]
+		if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: fmt.Sprintf("%sFile%04d.java", dir, i), Mode: 0664, Size: int64(n)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(data); err != nil {
+			t.Fatal(err)
+		}
+		total += n
+	}
+	if writer.Close() != nil || gz.Close() != nil {
+		t.Fatal("fixture archive failed")
+	}
+	return output.Bytes(), total
+}
+
+func TestLargeRepositoryArchiveDecodesAndValidates(t *testing.T) {
+	raw, total := largeArchive(t, gzip.DefaultCompression, 2000, func(i int) int {
+		if i%500 == 0 {
+			return 3*1024*1024 + i
+		}
+		return 14 * 1024
+	})
+	if total < 40*1000*1000 {
+		t.Fatalf("fixture content %d", total)
+	}
+	for name, input := range map[string]io.Reader{"bytes": nil, "stream": iotest.HalfReader(bytes.NewReader(raw))} {
+		t.Run(name, func(t *testing.T) {
+			var b workspacebundle.Bundle
+			var err error
+			if input == nil {
+				b, err = DecodeArchive(raw, testSHA)
+			} else {
+				b, err = DecodeArchiveFrom(input, testSHA)
+			}
+			if err != nil || len(b.Files) != 2000 || b.Validate() != nil {
+				t.Fatalf("large archive refused: %v files=%d", err, len(b.Files))
+			}
+			wire, err := workspacebundle.Encode(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := workspacebundle.Decode(wire)
+			if err != nil || len(decoded.Files) != 2000 {
+				t.Fatal("bundle of a large archive refused", err)
+			}
+		})
+	}
+}
+
+func TestArchiveCompressedBound(t *testing.T) {
+	// Stored (level 0) blocks: about 100 MiB compressed, under the content
+	// and expanded bounds, over MaxArchiveBytes.
+	raw, _ := largeArchive(t, gzip.NoCompression, 25, func(int) int { return workspacebundle.MaxFileBytes })
+	if len(raw) <= MaxArchiveBytes {
+		t.Fatalf("fixture %d bytes", len(raw))
+	}
+	if _, err := DecodeArchiveFrom(bytes.NewReader(raw), testSHA); err == nil {
+		t.Fatal("compressed bound ignored")
+	}
+	if _, err := DecodeArchive(raw, testSHA); err == nil {
+		t.Fatal("compressed bound ignored for bytes")
 	}
 }

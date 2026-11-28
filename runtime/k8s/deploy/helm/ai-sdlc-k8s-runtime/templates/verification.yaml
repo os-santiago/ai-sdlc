@@ -53,6 +53,14 @@ rules:
     resources: [pods/exec]
     verbs: [get, create]
   {{- end }}
+  {{- if include "ai-sdlc-k8s-runtime.dependencyCache" . }}
+  # verification.dependencies: read the sealed cache claim before any pod is
+  # created. The operator fills and seals it; the controller
+  # never writes or deletes one.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  {{- end }}
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [list]
@@ -177,9 +185,13 @@ spec:
           ports: [{name: http, containerPort: 8087}{{ if .Values.metrics.enabled }}, {name: metrics, containerPort: {{ .Values.metrics.port }}}{{ end }}]
           readinessProbe: {httpGet: {path: /readyz, port: http}{{ with $.Values.probes.readinessTimeoutSeconds }}, timeoutSeconds: {{ . }}{{ end }}}
           livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
+          {{- /* At the workspace bundle limits (128 MiB of content, 192 MiB on
+                 the wire) a review holds the source, the candidate tree, its
+                 encoding and the joined export: about 1.0-1.1 GiB live
+                 (docs/operations/large-repositories.md). */}}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 1536Mi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           volumeMounts:
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}

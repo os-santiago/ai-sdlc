@@ -38,6 +38,12 @@ func TestFixedHelperRoundTripAndIdentity(t *testing.T) {
 	if !bytes.Equal(result.Bytes(), raw) {
 		t.Fatal("helper changed bytes")
 	}
+	// A refused import (here over the existing repository) still consumes
+	// its stdin, so an exec client writing it never blocks.
+	input := bytes.NewReader(raw)
+	if run(args, input, io.Discard, uidPath, parent) == nil || input.Len() != 0 {
+		t.Fatal("refused import left stdin unread", input.Len())
+	}
 	args[2] = "22222222-2222-4222-8222-222222222222"
 	if run(args, bytes.NewReader(raw), io.Discard, uidPath, t.TempDir()) == nil {
 		t.Fatal("wrong UID accepted")

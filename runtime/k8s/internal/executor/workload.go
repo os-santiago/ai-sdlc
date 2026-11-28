@@ -82,7 +82,7 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 	identity := map[string]any{"name": "pod-identity", "mountPath": "/var/run/ai-sdlc/pod", "readOnly": true}
 	assignment := map[string]any{"name": "assignment", "mountPath": InputDirectory, "readOnly": true}
 	worker := map[string]any{"name": "worker", "image": workerImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/executor", "--assignment-sha256", digest}, "securityContext": security,
-		"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "768Mi", "ephemeral-storage": "128Mi"}},
+		"resources":    map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": "768Mi", "ephemeral-storage": workerStorage}},
 		"volumeMounts": []any{workspace, assignment, identity},
 	}
 	mailbox := map[string]any{"name": "mailbox", "image": mailboxImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/model-mailbox", "serve", "--attempt", fmt.Sprintf("%s-%d", a.WorkItemID, a.Attempt), "--pod-uid", "$(POD_UID)", "--model", p.Model, "--max-tokens", fmt.Sprint(p.MaxTokens)}, "securityContext": security,
@@ -102,7 +102,9 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"volumes": []any{
-			map[string]any{"name": "workspace", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "64Mi"}},
+			// Disk-backed: the imported repository (up to the bundle's 128 MiB of
+			// content) and the agent's changes are not charged to memory.
+			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": WorkspaceVolume}},
 			map[string]any{"name": "bridge", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "4Mi"}},
 			map[string]any{"name": "assignment", "configMap": map[string]any{"name": configName, "defaultMode": 0444}},
 			map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
