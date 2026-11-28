@@ -425,8 +425,10 @@ CI_VOLUME_PREFIXES = ('ai-sdlc-ci-maven-cache-', 'deps-')
 def ci_worker(run, kubectl, nodes):
     """The worker that runs every Tekton CI pod: the node that already holds
     the CI namespace's node-local caches (Maven caches, dependency work
-    claims), or the first worker when none is bound yet. Caches on more than
-    one node cannot all be served and are refused."""
+    claims), else the worker that already carries the CI label, else the
+    first worker. Caches bound on several nodes are refused, and so is moving
+    the label while a PipelineRun is in progress (its source claim is bound
+    on the current CI worker)."""
     if not nodes['workers']:
         return None
     raw = _command(run, kubectl + ['get', 'pv', '-o', 'json']).stdout
@@ -445,7 +447,20 @@ def ci_worker(run, kubectl, nodes):
                          % ', '.join(sorted(hosts)))
     if hosts and next(iter(hosts)) not in nodes['workers']:
         raise ValueError('Tekton CI caches are bound to %s, which is not a worker' % next(iter(hosts)))
-    return next(iter(hosts)) if hosts else nodes['workers'][0]
+    labelled = [name.removeprefix('node/') for name in
+                _command(run, kubectl + ['get', 'nodes', '-l', CI_LABEL + '=' + CI, '-o', 'name']).stdout.split()]
+    current = next((name for name in labelled if name in nodes['workers']), None)
+    choice = next(iter(hosts)) if hosts else (current or nodes['workers'][0])
+    if current and choice != current:
+        runs = _command(run, kubectl + ['get', 'pipelineruns.tekton.dev', '-n', 'ai-sdlc-ci', '--ignore-not-found',
+                                        '-o', 'json'], check=False).stdout
+        active = [r['metadata']['name'] for r in (json.loads(runs) if runs.strip() else {}).get('items', [])
+                  if not (r.get('status') or {}).get('completionTime')]
+        if active:
+            raise ValueError('Moving the CI worker from %s to %s while PipelineRuns are in progress (%s) would strand '
+                             'their source claims; rerun the installer after they finish'
+                             % (current, choice, ', '.join(sorted(active)[:3])))
+    return choice
 
 
 def tekton_pod_template():

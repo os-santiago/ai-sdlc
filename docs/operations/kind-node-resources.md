@@ -137,8 +137,13 @@ three-pod verification with six PostgreSQL sidecars ran on the same node.
   worker, which is prepared like every worker. This covers runs from
   `tools/tekton_ci_run.py` and runs the runtime creates. The CI worker is the
   worker that already holds the CI caches, or the first worker when none is
-  bound. Caches bound on several nodes are refused. The CI admission policy
-  admits exactly this nodeSelector and toleration in a run's template.
+  bound. A labelled CI worker keeps the label, and the installer refuses to
+  move it while a PipelineRun is in progress. Caches bound on several nodes
+  are refused. The CI admission policy admits exactly this nodeSelector and
+  toleration in a run's template.
+- Executors and reviewers are not pinned. The scheduler may place them on the
+  CI worker too, where they compete with CI and verification runs for that
+  worker's CPU, memory and `maxPods` slots.
 - The installer verifies the runtime with the usual conformance probe and also
   runs one sandboxed pod pinned to each worker (`nodeVerification` in the
   report). `local` also runs the network-policy conformance on the workers

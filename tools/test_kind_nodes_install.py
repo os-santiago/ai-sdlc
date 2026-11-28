@@ -356,8 +356,14 @@ class WorkerTopologyTests(unittest.TestCase):
             return {'spec': {'claimRef': {'namespace': namespace, 'name': claim}, 'nodeAffinity': {'required': {
                 'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [host]}]}]}}}}
 
-        def runner(items):
-            return lambda args, **_k: SimpleNamespace(stdout=json.dumps({'items': items}))
+        def runner(items, labelled=(), runs=()):
+            def run(args, **_k):
+                if 'pv' in args:
+                    return SimpleNamespace(stdout=json.dumps({'items': items}))
+                if 'nodes' in args:
+                    return SimpleNamespace(stdout=''.join('node/' + n + '\n' for n in labelled))
+                return SimpleNamespace(stdout=json.dumps({'items': list(runs)}))
+            return run
         nodes = {'controlPlane': 'c-control-plane', 'workers': ['c-worker', 'c-worker2']}
         self.assertEqual(kind_nodes.ci_worker(runner([]), ['kubectl'], nodes), 'c-worker')
         cached = [volume('ai-sdlc-ci-maven-cache-abc', 'c-worker2'), volume('pvc-source', 'c-worker'),
@@ -368,6 +374,40 @@ class WorkerTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not a worker'):
             kind_nodes.ci_worker(runner([volume('ai-sdlc-ci-maven-cache-abc', 'c-control-plane')]), ['kubectl'], nodes)
         self.assertIsNone(kind_nodes.ci_worker(runner(cached), ['kubectl'], {'controlPlane': 'c-control-plane', 'workers': []}))
+        # Without bound caches the current CI worker stays.
+        self.assertEqual(kind_nodes.ci_worker(runner([], ['c-worker2']), ['kubectl'], nodes), 'c-worker2')
+        # The label never moves while a PipelineRun is in progress.
+        active = [{'metadata': {'name': 'maven-build-test-x'}, 'status': {}}]
+        done = [{'metadata': {'name': 'old'}, 'status': {'completionTime': '2026-11-28T00:00:00Z'}}]
+        with self.assertRaisesRegex(ValueError, 'in progress'):
+            kind_nodes.ci_worker(runner(cached, ['c-worker'], active), ['kubectl'], nodes)
+        self.assertEqual(kind_nodes.ci_worker(runner(cached, ['c-worker'], done), ['kubectl'], nodes), 'c-worker2')
+        self.assertEqual(kind_nodes.ci_worker(runner(cached, ['c-worker2'], active), ['kubectl'], nodes), 'c-worker2',
+                         'no move, no refusal')
+
+    def test_network_probe_pods_carry_the_worker_placement(self):
+        import network_probe
+        applied = []
+
+        def runner(args, input=None, **_k):
+            if 'apply' in args:
+                applied.append(json.loads(input))
+            if args[-4:] == ['create', '-f', '-', '-o'] or 'json' in args and 'create' in args:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({'metadata': {'uid': 'u'}}))
+            if 'wait' in args and '--for=condition=Ready' in args:
+                return SimpleNamespace(returncode=1, stdout='')
+            return SimpleNamespace(returncode=0, stdout='')
+        placement = {'nodeSelector': {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX}, 'tolerations': [kind_nodes.toleration()]}
+        with self.assertRaises(ValueError):
+            network_probe.verify(['kubectl'], 'image', runner=runner, placement=placement)
+        self.assertEqual(len(applied), 3)
+        for value in applied:
+            self.assertEqual(value['spec']['nodeSelector'], placement['nodeSelector'])
+            self.assertEqual(value['spec']['tolerations'], placement['tolerations'])
+        applied.clear()
+        with self.assertRaises(ValueError):
+            network_probe.verify(['kubectl'], 'image', runner=runner)
+        self.assertTrue(all('nodeSelector' not in v['spec'] for v in applied))
 
     def test_addresses_use_the_network_kind_uses(self):
         networks = {'c-control-plane': {'custom': {'IPAddress': '10.1.0.2'}},
