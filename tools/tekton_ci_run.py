@@ -7,6 +7,7 @@ Pipelines (installed by `./install.sh local --tekton-ci`, docs/operations/tekton
                       pull-request CI and the build/test tool
   maven-dependencies  fill the shared Maven cache; current base-branch head only
   npm-lock-update     update an npm lockfile with scripts disabled
+  dependency-audit    known vulnerabilities of an npm lockfile or Maven module
 
 Inputs are validated before any cluster access, and each PipelineRun
 references an installed pipeline (Tekton refuses inline specifications).
@@ -34,14 +35,15 @@ MIRROR = re.compile(r'https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-
 MAVEN_ARG = re.compile(r'-[A-Za-z][A-Za-z0-9_.:=,!*/@+-]{0,199}')
 # npm update takes package names only and stays within package.json ranges.
 NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}')
-# The pipeline task that runs untrusted candidate code offline can get the
-# sandbox runtime class (--sandbox). The installed ai-sdlc-offline class
-# configures gVisor with network=none, so fetch tasks (trusted base inputs, or
-# npm with scripts disabled) always use the default runtime. Opt-in for now:
-# with the pinned runsc build, Tekton task pods failed to start their
-# sub-containers ("creating root file system: input/output error") although a
-# plain four-container pod started; see docs/operations/tekton-ci.md.
+# The pipeline task that runs untrusted candidate code offline runs under the
+# sandbox runtime class (gVisor, installed by ./install.sh sandbox, which also
+# raises the node's per-scope task limit that gVisor pods need; admission
+# refuses a build-test run without it). The class has
+# network=none, so fetch tasks (trusted base inputs, or npm with scripts
+# disabled) always use the default runtime.
 SANDBOXED_TASKS = {'ai-sdlc-maven-build-test': 'build-test'}
+# Candidate-code pods carry this class; a ResourceQuota allows one at a time.
+CANDIDATE_PRIORITY = 'ai-sdlc-ci-candidate'
 POD_SECURITY = {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532, 'fsGroup': 65532,
                 'seccompProfile': {'type': 'RuntimeDefault'}}
 
@@ -143,7 +145,8 @@ def pipeline_run(pipeline, repository, revision, params, workspaces, target, run
         if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?', runtime_class):
             raise ValueError('Invalid runtime class name')
         spec['taskRunSpecs'] = [{'pipelineTaskName': SANDBOXED_TASKS[pipeline],
-                                 'podTemplate': dict(pod, runtimeClassName=runtime_class)}]
+                                 'podTemplate': dict(pod, runtimeClassName=runtime_class,
+                                                     priorityClassName=CANDIDATE_PRIORITY)}]
     return {'apiVersion': 'tekton.dev/v1', 'kind': 'PipelineRun',
             'metadata': {'generateName': pipeline.removeprefix('ai-sdlc-') + '-', 'namespace': tekton_ci_install.CI_NAMESPACE,
                          'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/pipeline': pipeline,
@@ -185,6 +188,27 @@ def npm_lock_update(repository, revision, directory, mode, packages, registry_ur
                         [], directory)
 
 
+# Registries an audit may send dependency lists to: the public ones, or the
+# in-cluster dependency proxy by cluster IP.
+AUDIT_NPM_REGISTRY = re.compile(r'https://registry\.npmjs\.org/|http://[0-9]{1,3}(?:\.[0-9]{1,3}){3}:8081/')
+AUDIT_MAVEN_REGISTRY = re.compile(r'https://repo\.maven\.apache\.org/maven2|http://[0-9]{1,3}(?:\.[0-9]{1,3}){3}:8080/maven2')
+
+
+def dependency_audit(repository, revision, ecosystem, target, registry_url='', maven_registry_url=''):
+    if ecosystem not in ('npm', 'maven'):
+        raise ValueError('ecosystem must be npm or maven')
+    if registry_url and (ecosystem != 'npm' or not AUDIT_NPM_REGISTRY.fullmatch(registry_url)):
+        raise ValueError('registry-url must be the public npm registry or the dependency proxy')
+    if maven_registry_url and (ecosystem != 'maven' or not AUDIT_MAVEN_REGISTRY.fullmatch(maven_registry_url)):
+        raise ValueError('maven-registry-url must be Maven Central or the dependency proxy')
+    return pipeline_run('ai-sdlc-dependency-audit', repository, revision,
+                        [{'name': 'ecosystem', 'value': ecosystem},
+                         {'name': 'target', 'value': validate_path(target, 'Audit target', allow_root=ecosystem == 'maven')},
+                         {'name': 'registry-url', 'value': registry_url},
+                         {'name': 'maven-registry-url', 'value': maven_registry_url}],
+                        [], target)
+
+
 def base_head(repository, branch):
     """Read the public base-branch head without credentials."""
     result = run(['git', 'ls-remote', '--', 'https://github.com/' + repository + '.git', 'refs/heads/' + branch],
@@ -200,6 +224,9 @@ def passed(observed, revision):
     commit and its tool reported exit code 0. The tasks publish a summary even
     when the tool fails, so the pipeline's own verdict is not enough."""
     summary = observed.get('summary') or {}
+    if 'complete' in summary:
+        # An audit passes when it completed; findings are its output, not a failure.
+        return observed.get('succeeded') is True and observed.get('commit') == revision and summary.get('complete') is True
     code = summary.get('mavenExitCode', summary.get('npmExitCode'))
     return observed.get('succeeded') is True and observed.get('commit') == revision and type(code) is int and code == 0
 
@@ -264,6 +291,23 @@ def connect(cluster):
     return kubectl
 
 
+def sandbox_ready(cluster, minimum, run=run):
+    """Evidence that ./install.sh sandbox raised the node's per-scope task limit.
+
+    A RuntimeClass from an earlier install leaves scopes at 307 tasks, where
+    sandboxed Tekton pods die; the node's systemd default must be at least the
+    reviewed value (or unlimited).
+    """
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / cluster
+    provider = json.loads((state / 'ownership.json').read_text()).get('provider')
+    if provider not in ('docker', 'podman'):
+        raise ValueError('Unknown kind provider in the ownership record')
+    shown = run([provider, 'exec', cluster + '-control-plane', 'systemctl', 'show', '-p', 'DefaultTasksMax', '--value'],
+                capture_output=True, timeout=60).stdout.strip()
+    if shown != 'infinity' and (not shown.isdigit() or int(shown) < minimum):
+        raise ValueError('The kind node still caps container scopes at ' + shown + ' tasks; re-run ./install.sh sandbox')
+
+
 def require_runtime_class(kubectl, name):
     if run(kubectl + ['get', 'runtimeclass', name, '-o', 'name'], capture_output=True, check=False).returncode != 0:
         raise ValueError('RuntimeClass ' + name + ' is absent; install it with ./install.sh sandbox')
@@ -286,12 +330,18 @@ def render_from_args(args, project):
         raise ValueError('Name --repository or a --project catalog')
     if project and repository != project['repository']:
         raise ValueError('Repository differs from the project catalog')
-    runtime_class = args.runtime_class if args.sandbox else None
+    runtime_class = args.runtime_class
     if args.pipeline == 'npm-lock-update':
         if project and args.directory not in project.get('npmDirectories', []):
             raise ValueError('npm directory is not in the project catalog')
         return npm_lock_update(repository, args.revision, args.directory, args.mode, args.package or [],
                                args.registry_url)
+    if args.pipeline == 'dependency-audit':
+        declared = (project.get('npmDirectories', []) if args.ecosystem == 'npm' else list(project['modules'])) if project else []
+        if project and args.directory not in declared:
+            raise ValueError('Audit target is not a catalog ' + ('npm directory' if args.ecosystem == 'npm' else 'Maven module'))
+        return dependency_audit(repository, args.revision, args.ecosystem, args.directory, args.registry_url,
+                                args.maven_mirror_url)
     entry = module_entry(project, args.module, args.allow_unverified) if project else None
     services = args.services.split(',') if args.services else (entry['services'] if entry else ['none'])
     maven_args = args.maven_arg if args.maven_arg is not None else (entry['mavenArgs'] if entry else [])
@@ -302,7 +352,7 @@ def render_from_args(args, project):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('pipeline', choices=['maven-build-test', 'maven-dependencies', 'npm-lock-update'])
+    parser.add_argument('pipeline', choices=['maven-build-test', 'maven-dependencies', 'npm-lock-update', 'dependency-audit'])
     parser.add_argument('--cluster', default='ai-sdlc')
     parser.add_argument('--project', type=Path, help='Catalog, for example ' + str((PROJECTS / 'quarkus-super-heroes.json').relative_to(ROOT)))
     parser.add_argument('--repository', help='owner/name; defaults to the catalog repository')
@@ -310,14 +360,14 @@ def main(argv=None):
     parser.add_argument('--module', default='.')
     parser.add_argument('--services', help='Comma-separated services; defaults to the catalog entry or none')
     parser.add_argument('--maven-arg', action='append', default=None, help='Extra Maven switch; replaces the catalog arguments')
-    parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies only: Maven proxy URL')
-    parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json')
+    parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies: Maven proxy URL; dependency-audit (maven): Maven registry, Central or the proxy')
+    parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json; dependency-audit: the target directory or module')
+    parser.add_argument('--ecosystem', choices=['npm', 'maven'], help='dependency-audit: npm or maven')
     parser.add_argument('--mode', default='update', choices=['update', 'audit-fix'])
     parser.add_argument('--package', action='append', help='npm-lock-update update mode: a package name (npm update takes no versions)')
     parser.add_argument('--registry-url', default='', help='npm-lock-update: registry or proxy URL')
     parser.add_argument('--allow-unverified', action='store_true', help='Run a catalog module whose status is unverified')
-    parser.add_argument('--sandbox', action='store_true', help='maven-build-test: run build-test under --runtime-class (gVisor)')
-    parser.add_argument('--runtime-class', default=SANDBOX, help='RuntimeClass for --sandbox (default ai-sdlc-offline)')
+    parser.add_argument('--runtime-class', default=SANDBOX, help='maven-build-test: sandbox RuntimeClass (default ai-sdlc-offline)')
     parser.add_argument('--wait', type=int, default=0, metavar='SECONDS', help='Wait up to SECONDS for completion (0: do not wait)')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', args.cluster) or not 0 <= args.wait <= 7200:
@@ -333,12 +383,16 @@ def main(argv=None):
             raise ValueError('maven-dependencies must use the current base-branch head')
     if not args.revision:
         raise ValueError('--revision is required')
-    if args.pipeline == 'npm-lock-update' and not args.directory:
+    if args.pipeline in ('npm-lock-update', 'dependency-audit') and not args.directory:
         raise ValueError('--directory is required')
+    if args.pipeline == 'dependency-audit' and not args.ecosystem:
+        raise ValueError('--ecosystem is required')
     rendered = render_from_args(args, project)
     kubectl = connect(args.cluster)
     if 'taskRunSpecs' in rendered['spec']:
         require_runtime_class(kubectl, args.runtime_class)
+        conf = (ROOT / 'runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf').read_text()
+        sandbox_ready(args.cluster, int(next(l.split('=', 1)[1] for l in conf.splitlines() if l.startswith('DefaultTasksMax='))))
     result = run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered), capture_output=True, check=False)
     if result.returncode != 0:
         # The rendered run carries no credential; show the API's reason (for
