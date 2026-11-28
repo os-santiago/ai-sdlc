@@ -13,9 +13,12 @@ import (
 func toolProfileFixture() Profile {
 	p := profileFixture()
 	p.MaxSeconds = 900
-	p.Tools = &ToolProfile{Calls: 2, Seconds: 600, Spec: generatortools.Spec{Tools: []generatortools.Tool{
-		{Name: "build_test", Kind: "maven-build-test", Targets: []string{"rest-villains"}}}}}
+	p.Tools = &ToolProfile{Calls: 2, Seconds: 600}
 	return p
+}
+
+func toolSpecFixture() *generatortools.Spec {
+	return &generatortools.Spec{Tools: []generatortools.Tool{{Name: "build_test", Kind: "maven-build-test", Targets: []string{"rest-villains"}}}}
 }
 
 // A generator profile with tools parses within its bounds; any profile
@@ -24,7 +27,7 @@ func TestToolProfileBounds(t *testing.T) {
 	p := toolProfileFixture()
 	raw, _ := json.Marshal(p)
 	got, err := ParseProfile(raw, workspacebundle.Digest(raw))
-	if err != nil || got.Tools == nil || got.Tools.Calls != 2 || got.Tools.Spec.Tools[0].Targets[0] != "rest-villains" {
+	if err != nil || got.Tools == nil || got.Tools.Calls != 2 || got.Tools.Seconds != 600 {
 		t.Fatal("tool profile", err)
 	}
 	for _, change := range []func(*Profile){
@@ -33,9 +36,6 @@ func TestToolProfileBounds(t *testing.T) {
 		func(p *Profile) { p.Tools.Seconds = MinToolSeconds - 1 },
 		func(p *Profile) { p.Tools.Seconds = MaxToolSeconds + 1 },
 		func(p *Profile) { p.MaxSeconds = 300 },
-		func(p *Profile) { p.Tools.Spec.Tools[0].Targets = []string{"../etc"} },
-		func(p *Profile) { p.Tools.Spec.Tools[0].Kind = "shell" },
-		func(p *Profile) { p.Tools.Spec = generatortools.Spec{} },
 	} {
 		q := toolProfileFixture()
 		change(&q)
@@ -49,6 +49,21 @@ func TestToolProfileBounds(t *testing.T) {
 	raw, _ = json.Marshal(review)
 	if _, err := ParseReviewProfile(raw, workspacebundle.Digest(raw)); err == nil {
 		t.Fatal("review profile accepted tools")
+	}
+}
+
+// An assignment carries the manifest's tool spec only in its valid shape.
+func TestAssignmentToolSpecBounds(t *testing.T) {
+	now := time.Now()
+	for _, spec := range []*generatortools.Spec{toolSpecFixture(), {}, {Tools: []generatortools.Tool{{Name: "x", Kind: "shell", Targets: []string{"."}}}},
+		{Tools: []generatortools.Tool{{Name: "x", Kind: "maven-build-test", Targets: []string{"a/../b"}}}}} {
+		a := assignmentFixture(now)
+		a.Tools = spec
+		raw, _ := json.Marshal(a)
+		_, err := ParseAssignment(raw, workspacebundle.Digest(raw), now)
+		if (spec.Validate() == nil) != (err == nil) {
+			t.Fatal("assignment tool spec", spec, err)
+		}
 	}
 }
 
@@ -70,7 +85,7 @@ func TestToolProfileConfiguresSCCAndMailbox(t *testing.T) {
 			} `json:"servers"`
 		} `json:"mcp"`
 	}
-	if json.Unmarshal(SCCConfiguration(p, nil), &cfg) != nil {
+	if json.Unmarshal(SCCToolConfiguration(p, nil, toolSpecFixture()), &cfg) != nil {
 		t.Fatal("config")
 	}
 	server, ok := cfg.MCP.Servers[ToolServerName]
@@ -87,18 +102,20 @@ func TestToolProfileConfiguresSCCAndMailbox(t *testing.T) {
 	if last := cfg.Permissions.AutoApprove[len(cfg.Permissions.AutoApprove)-1]; last != "mcp__ai-sdlc__build_test" {
 		t.Fatal("tool not auto-approved", cfg.Permissions.AutoApprove)
 	}
-	plain := string(SCCConfiguration(profileFixture(), nil))
-	if strings.Contains(plain, "mcp") {
-		t.Fatal("tools leaked into a plain profile")
+	for _, plain := range []string{string(SCCConfiguration(p, nil)), string(SCCToolConfiguration(profileFixture(), nil, toolSpecFixture()))} {
+		if strings.Contains(plain, "mcp") {
+			t.Fatal("tools offered without both the profile and the manifest")
+		}
 	}
 
-	command := func(p Profile) string {
+	command := func(p Profile, tools *generatortools.Spec) string {
 		now := time.Now()
 		adev := []byte("reviewed profile fixture")
 		p.ADevSHA256 = workspacebundle.Digest(adev)
 		profile, _ := json.Marshal(p)
 		a := assignmentFixture(now)
 		a.ProfileSHA256 = workspacebundle.Digest(profile)
+		a.Tools = tools
 		assignment, _ := json.Marshal(a)
 		image := "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("a", 64)
 		w, err := Compile("fixture", image, image, DefaultRuntimeClass, assignment, profile, adev, now)
@@ -108,7 +125,8 @@ func TestToolProfileConfiguresSCCAndMailbox(t *testing.T) {
 		raw, _ := json.Marshal(w.Pod)
 		return string(raw)
 	}
-	if !strings.Contains(command(p), `"--tool-calls","2","--tool-wait-seconds","600"`) || strings.Contains(command(profileFixture()), "--tool-calls") {
+	if !strings.Contains(command(p, toolSpecFixture()), `"--tool-calls","2","--tool-wait-seconds","600"`) ||
+		strings.Contains(command(profileFixture(), toolSpecFixture()), "--tool-calls") || strings.Contains(command(p, nil), "--tool-calls") {
 		t.Fatal("mailbox tool route bounds")
 	}
 }

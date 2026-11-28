@@ -74,7 +74,7 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 		return map[string]any{"name": n, "namespace": namespace, "labels": labels, "annotations": map[string]any{"ai-sdlc.io/assignment-sha256": digest, "ai-sdlc.io/authority-revision": a.AuthorityRevision}}
 	}
 	config := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(configName), "immutable": true, "data": map[string]any{
-		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCConfiguration(p, a.Toolchain)),
+		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCToolConfiguration(p, a.Toolchain, a.Tools)),
 	}}
 	security := map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}}
 	workspace := map[string]any{"name": "workspace", "mountPath": "/workspaces"}
@@ -93,7 +93,7 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 	if p.CallSeconds != 0 {
 		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
 	}
-	if p.Tools != nil {
+	if ToolsEnabled(p, a.Tools) {
 		mailbox["command"] = append(mailbox["command"].([]string), "--tool-calls", fmt.Sprint(p.Tools.Calls),
 			"--tool-wait-seconds", fmt.Sprint(p.Tools.Seconds))
 	}

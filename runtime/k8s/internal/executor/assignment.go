@@ -59,6 +59,10 @@ type Assignment struct {
 	// already carries it). It requires WorkspaceOfflineTests and excludes
 	// Toolchain. Omitted keeps the original assignment bytes.
 	Verification *Verification `json:"verification,omitempty"`
+	// Tools are the generator tools the reviewed manifest declares (its
+	// tekton.tools with their targets). They are offered only when the
+	// profile also enables tools. Omitted keeps the original assignment bytes.
+	Tools *generatortools.Spec `json:"tools,omitempty"`
 }
 
 // Verification is installation-controlled assignment context, never issue or
@@ -89,13 +93,14 @@ type Profile struct {
 	Tools *ToolProfile `json:"tools,omitempty"`
 }
 
-// ToolProfile bounds the generator's tool calls: how many, how long each may
-// take, and which tools and targets exist. Tool time is spent inside the
-// generation's own MaxSeconds, because the generator waits for each result.
+// ToolProfile bounds the generator's tool calls: how many and how long each
+// may take. It is installation configuration; which tools and targets exist
+// comes from the repository's reviewed manifest (Assignment.Tools). Tool time
+// is spent inside the generation's own MaxSeconds, because the generator waits
+// for each result.
 type ToolProfile struct {
-	Calls   int                 `json:"calls"`
-	Seconds int                 `json:"seconds"`
-	Spec    generatortools.Spec `json:"spec"`
+	Calls   int `json:"calls"`
+	Seconds int `json:"seconds"`
 }
 
 // Bounds of ToolProfile.
@@ -106,8 +111,7 @@ const (
 )
 
 func (t ToolProfile) validate(maxSeconds int) error {
-	if t.Calls < 1 || t.Calls > MaxToolCalls || t.Seconds < MinToolSeconds || t.Seconds > MaxToolSeconds || t.Seconds > maxSeconds ||
-		t.Spec.Validate() != nil {
+	if t.Calls < 1 || t.Calls > MaxToolCalls || t.Seconds < MinToolSeconds || t.Seconds > MaxToolSeconds || t.Seconds > maxSeconds {
 		return ErrInvalid
 	}
 	return nil
@@ -261,6 +265,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 	if fields["verification"] != nil {
 		keys = append(keys, "verification")
 	}
+	if fields["tools"] != nil {
+		keys = append(keys, "tools")
+	}
 	if strictBound(raw, expected, MaxAssignmentBytes, keys, &a) != nil || a.Version != AssignmentVersion || !uuidPattern.MatchString(a.WorkItemID) || a.Attempt < 1 || a.Attempt > 16 || len(a.Repository) > 256 || !repoPattern.MatchString(a.Repository) || !workspacebundle.ValidSourceSHA(a.SourceSHA) || !workspacebundle.ValidDigest(a.TreeSHA256) || !workspacebundle.ValidDigest(a.ProfileSHA256) || !workspacebundle.ValidDigest(a.AuthorityRevision) {
 		return Assignment{}, ErrInvalid
 	}
@@ -274,6 +281,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 		return Assignment{}, ErrInvalid
 	}
 	if a.Verification != nil && (a.Workspace != WorkspaceOfflineTests || a.Toolchain != nil || !project.ValidCommand(a.Verification.Command, a.Verification.WorkingDir)) {
+		return Assignment{}, ErrInvalid
+	}
+	if a.Tools != nil && a.Tools.Validate() != nil {
 		return Assignment{}, ErrInvalid
 	}
 	for _, part := range strings.Split(a.Repository, "/") {

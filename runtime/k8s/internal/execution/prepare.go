@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/normalizedevent"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -278,6 +280,7 @@ func addRepositoryContext(a *executor.Assignment, projectSHA256 string) error {
 	}
 	a.Workspace = workspaceOf(m)
 	a.Toolchain = toolchainOf(m)
+	a.Tools = ToolSpecOf(m)
 	if a.Toolchain == nil {
 		a.Verification = verificationOf(m)
 	}
@@ -295,6 +298,33 @@ func WorkspaceFor(repository, projectSHA256 string) string {
 		return ""
 	}
 	return workspaceOf(m)
+}
+
+// ToolSpecOf renders the manifest's tekton.tools as the generator tool spec:
+// each tool with the targets its pipeline accepts (the declared Maven modules
+// or npm directories). Nil when the manifest declares no tools.
+func ToolSpecOf(m project.Manifest) *generatortools.Spec {
+	if m.Tekton == nil || len(m.Tekton.Tools) == 0 {
+		return nil
+	}
+	spec := &generatortools.Spec{}
+	for _, tool := range m.Tekton.Tools {
+		var targets []string
+		switch project.TektonTargetKind(tool.Pipeline) {
+		case "module":
+			for module := range m.Tekton.Modules {
+				targets = append(targets, module)
+			}
+			slices.Sort(targets)
+		case "npm":
+			targets = append(targets, m.Tekton.NpmDirectories...)
+		}
+		spec.Tools = append(spec.Tools, generatortools.Tool{Name: tool.Name, Kind: tool.Pipeline, Targets: targets})
+	}
+	if spec.Validate() != nil {
+		return nil
+	}
+	return spec
 }
 
 func workspaceOf(m project.Manifest) string {
