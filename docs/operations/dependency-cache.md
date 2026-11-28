@@ -8,7 +8,7 @@ cache.
 | Component | Where | Network |
 |---|---|---|
 | Dependency proxy (Maven and npm) | `ai-sdlc-dependencies`, from the chart (`--dependency-proxy`) | The only pod with egress: DNS and HTTPS to the configured upstream hosts |
-| Dependency tasks (`maven-dependencies`, `npm-lock-update`) | `ai-sdlc-ci`, from the Tekton CI catalog (`--tekton-ci`, in review) | The proxy only |
+| Dependency tasks (`maven-dependencies`, `npm-lock-update`) | `ai-sdlc-ci`, from the [Tekton CI](tekton-ci.md) catalog (`--tekton-ci`) | The proxy only |
 | Test tasks and ai-sdlc verification pods | `ai-sdlc-ci` (tests), `ai-sdlc-verifiers` (verification) | None (deny-all; verification also `network=none` in the sandbox) |
 
 ## 1. The proxy
@@ -80,8 +80,8 @@ temporary files and the file system.
 ### The CI side of the contract
 
 The Tekton CI catalog owns the `ai-sdlc-ci` namespace. Its dependency tasks
-reach the proxy through this policy, which the catalog adds next to its
-default deny:
+reach the proxy through this policy, which the catalog ships next to its
+default deny (`runtime/k8s/deploy/tekton-ci/ci/network-policy.yaml`):
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -338,8 +338,9 @@ review and easy to get wrong. The flow is:
 
 ## Remaining work
 
-- The adapter switch to `ai-sdlc.io/ci-egress: dependency-proxy` and the
-  policy above, in the Tekton CI catalog.
+- Switching `maven-dependencies`, `npm-lock-update` and `dependency-audit`
+  from the `fetch` label to `ai-sdlc.io/ci-egress: dependency-proxy` when the
+  proxy is installed (the catalog already ships the policy above).
 - Automatic cache fill and seal per base revision (Tekton trigger on
   base-branch pushes that change key files), and pruning of old `deps-*`
   claims.

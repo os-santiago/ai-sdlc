@@ -1,0 +1,66 @@
+# Check out one trusted commit (the current base-branch head) and fill the
+# shared Maven cache for one module. The only pipeline that writes the cache.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ai-sdlc-maven-dependencies
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Fill the shared Maven cache for one module from a trusted commit.
+  params:
+    - name: repository
+      type: string
+    - name: revision
+      type: string
+    - name: module
+      type: string
+      default: "."
+    - name: services
+      type: string
+      default: none
+    - name: maven-args
+      type: array
+      default: []
+    - name: maven-mirror-url
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+    - name: maven-cache
+  tasks:
+    - name: checkout
+      taskRef:
+        name: source-checkout
+      params:
+        - name: repository
+          value: $(params.repository)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: source
+    - name: dependencies
+      runAfter: [checkout]
+      taskRef:
+        name: maven-dependencies
+      params:
+        - name: module
+          value: $(params.module)
+        - name: services
+          value: $(params.services)
+        - name: maven-args
+          value: ["$(params.maven-args[*])"]
+        - name: maven-mirror-url
+          value: $(params.maven-mirror-url)
+      workspaces:
+        - name: source
+          workspace: source
+        - name: maven-cache
+          workspace: maven-cache
+  results:
+    - name: commit
+      value: $(tasks.checkout.results.commit)
+    - name: summary
+      value: $(tasks.dependencies.results.summary)

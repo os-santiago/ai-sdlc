@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "release": "v1.15.5",
+  "url": "https://github.com/tektoncd/pipeline/releases/download/v1.15.5/release.yaml",
+  "sha256": "c2fe5c2ac98af2984f2d58199e81ef2056802f671051744d986ec998ad19ba84",
+  "bytes": 1629982,
+  "maxBytes": 4194304,
+  "images": [
+    "ghcr.io/tektoncd/pipeline/controller-10a3e32792f33651396d02b6855a6e36:v1.15.5@sha256:687a9f10236509fa82f86fc9b10525c418572b5853e18d38cdfec29827f31796",
+    "ghcr.io/tektoncd/pipeline/entrypoint-bff0a22da108bc2f16c818c97641a296:v1.15.5@sha256:f20af440d7627a229692528e7c440c77493e97ea9693d46afc5b01a8e70b3722",
+    "ghcr.io/tektoncd/pipeline/events-a9042f7efb0cbade2a868a1ee5ddd52c:v1.15.5@sha256:6375e56fc283f20133b60b6d9ee4427aa4a8909d3b4465f14e9b806368ad0570",
+    "ghcr.io/tektoncd/pipeline/nop-8eac7c133edad5df719dc37b36b62482:v1.15.5@sha256:bb27452a83b927df9e9d4c65a9882a1468ae2d192805aadb4d60c01480ab6048",
+    "ghcr.io/tektoncd/pipeline/resolvers-ff86b24f130c42b88983d3c13993056d:v1.15.5@sha256:8e98a0e406d3d965531815e8d6b9167a8ebd522d69470599ed07497a59065077",
+    "ghcr.io/tektoncd/pipeline/sidecarlogresults-7501c6a20d741631510a448b48ab098f:v1.15.5@sha256:6f5c28363a76c1c68a29164f23ce555757823a0a6aad3bd003b0ed647bd34fe4",
+    "ghcr.io/tektoncd/pipeline/webhook-d4749e605405422fd87700164e31b2d1:v1.15.5@sha256:e48f0a03067fa8f112d36ab5ad7284871ebcbfe65997018fab7a2749fc064a63",
+    "ghcr.io/tektoncd/pipeline/workingdirinit-0c558922ec6a1b739e550e349f2d5fc1:v1.15.5@sha256:744b8a5e7e8cc0b292e30aa89c0ebc9f3f0bb81d85836c78b6d91dc642d9046a"
+  ],
+  "namespaces": [
+    "tekton-pipelines",
+    "tekton-pipelines-resolvers"
+  ],
+  "customResourceDefinitions": [
+    "customruns.tekton.dev",
+    "pipelineruns.tekton.dev",
+    "pipelines.tekton.dev",
+    "resolutionrequests.resolution.tekton.dev",
+    "stepactions.tekton.dev",
+    "taskruns.tekton.dev",
+    "tasks.tekton.dev",
+    "verificationpolicies.tekton.dev"
+  ],
+  "requiredDeployments": [
+    "tekton-pipelines-resolvers/tekton-pipelines-remote-resolvers",
+    "tekton-pipelines/tekton-events-controller",
+    "tekton-pipelines/tekton-pipelines-controller",
+    "tekton-pipelines/tekton-pipelines-webhook"
+  ]
+}

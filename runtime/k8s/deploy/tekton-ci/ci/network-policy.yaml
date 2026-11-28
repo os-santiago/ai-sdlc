@@ -1,0 +1,109 @@
+# Deny every ingress and egress in the CI namespace. Fetch tasks
+# (source-checkout, maven-dependencies, npm-lock-update, dependency-audit) carry the
+# ai-sdlc.io/ci-egress: fetch label, which Tekton copies from each Task to its
+# pods; they may use cluster DNS and public HTTPS (TCP 443) to non-private
+# addresses. Private, link-local, shared and loopback ranges are excluded, so
+# no pod reaches the Kubernetes API, node addresses or cluster Services.
+# maven-build-test carries no label and has no network at all. Enforcement
+# can start a few seconds after a pod starts; tasks that run code wait for it.
+# Sidecar services (for example PostgreSQL) are reached over the pod's own
+# loopback interface, which NetworkPolicy does not filter.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-default-deny
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-fetch-dns
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: fetch
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-fetch-https
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: fetch
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 224.0.0.0/3
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# The CI side of the dependency proxy contract (docs/operations/dependency-cache.md
+# in the proxy change): pods labelled ai-sdlc.io/ci-egress: dependency-proxy
+# reach only the proxy pods (Maven 8080, npm 8081), and nothing else, not even
+# DNS: callers pass the proxy Service's cluster IP. No task carries this label
+# until the proxy is installed; then maven-dependencies, npm-lock-update and
+# dependency-audit switch to it from fetch.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-dependency-proxy
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: dependency-proxy
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ai-sdlc-dependencies
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: dependency-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8081

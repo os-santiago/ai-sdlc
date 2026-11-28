@@ -27,6 +27,7 @@ import github_merge_policy
 import konflux_runtime_install
 import openshift_install
 import build_runtime_install
+import tekton_ci_install
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -509,6 +510,8 @@ def _main(argv, stack):
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     parser.add_argument('--flow-console', action='store_true', default=None, help='Enable the read-only flow console (docs/operations/flow-console.md); omitting it on a later install disables it')
     parser.add_argument('--dependency-proxy', help='Deploy the in-cluster dependency proxy for maven, npm or maven,npm (docs/operations/dependency-cache.md); omitting it on a later install removes it')
+    parser.add_argument('--tekton-ci', action='store_true', default=None, help='Install pinned Tekton Pipelines and the reviewed Maven CI pipeline (docs/operations/tekton-ci.md); kind only')
+    parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -543,6 +546,7 @@ def _main(argv, stack):
             raise ValueError('Release configuration requires prepared mode, approved target, published deployer pins and installed browser profile')
     konflux_runtime_install.validate_options(args)
     openshift_install.validate_options(args)
+    tekton_ci_install.validate_options(args)
     if args.runtime_class is not None:
         import candidate_install
         candidate_install.validate_runtime_class(args.runtime_class)
@@ -670,6 +674,7 @@ def _main(argv, stack):
                     preview_values['console']['digest'] = console_digest
             json.dump(preview_values, preview); preview.flush()
             run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
+    tekton_plan = tekton_ci_install.plan() if args.tekton_ci else None
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
@@ -680,6 +685,7 @@ def _main(argv, stack):
                           'buildEnabled': build_bundle is not None,
                           # Only with the option: default output is unchanged.
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
+                          **({'tektonCI': tekton_plan} if tekton_plan else {}),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -749,6 +755,10 @@ def _main(argv, stack):
         config = read_resource(kubectl, 'configmap', 'ai-sdlc-config')
         mode = (config or {}).get('data', {}).get('AI_SDLC_RUNTIME_MODE', 'unknown')
         print('Installation mode: ' + mode + '. Autonomous issue-to-production delivery: unavailable.')
+        if args.tekton_ci:
+            observation = tekton_ci_install.observe(run, kubectl)
+            print(json.dumps({'tektonCI': observation}, indent=2))
+            return 0 if observation['ready'] else 1
         return 0
     if args.command == 'credentials':
         policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
@@ -871,6 +881,10 @@ def _main(argv, stack):
         remove_console_credential(kubectl, cluster_uid)
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
+    # After the runtime is ready: a Tekton failure leaves the runtime intact
+    # and the owned Tekton state in place for reapplication.
+    tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout,
+                                          args.tekton_ci_repository or [args.repository.lower()]) if args.tekton_ci else None
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
@@ -886,6 +900,7 @@ def _main(argv, stack):
                           # Only with the option: default output is unchanged.
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
               'networkPolicyVerification': network,
+              **({'tektonCI': tekton_ci} if tekton_ci else {}),
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
