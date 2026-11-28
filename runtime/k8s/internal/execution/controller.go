@@ -212,7 +212,8 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 		return record, ControllerError{stage}
 	}
 	stage = "tools"
-	tools, err := generatorTools(ctx, prepared, load, session, func() (tektontasks.Cluster, error) { return client.TektonCluster() }, newToolJournal(db, scope.AllocationID))
+	tools, err := generatorTools(ctx, prepared, load, session, func() (tektontasks.Cluster, error) { return client.TektonCluster() },
+		newToolJournal(db, scope.AllocationID), func(ctx context.Context) error { _, e := l.Authorize(ctx, scope); return e })
 	if err != nil {
 		return record, ControllerError{stage}
 	}

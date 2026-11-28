@@ -22,7 +22,7 @@ import (
 // bound attempt, accept only a valid tool request, report "none pending", and
 // confirm a publication only by a receipt naming the request digest.
 func TestToolHelpersAreFixedBoundAndConfirmed(t *testing.T) {
-	for _, kind := range []string{"read", "pending", "read-wrong-kind", "respond", "respond-wrong-receipt", "respond-refused"} {
+	for _, kind := range []string{"read", "pending", "read-wrong-kind", "respond", "respond-wrong-receipt", "respond-refused", "respond-not-pending"} {
 		t.Run(kind, func(t *testing.T) {
 			binding, pod, reply := bindingFixture(t)
 			payload := []byte(`{"tool":"build_test","target":"rest-villains","diff":""}`)
@@ -83,6 +83,8 @@ func TestToolHelpersAreFixedBoundAndConfirmed(t *testing.T) {
 					out, _ = json.Marshal(map[string]string{"published": strings.Repeat("e", 64)})
 				case "respond-refused":
 					status = []byte(`{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"1"}]}}`)
+				case "respond-not-pending":
+					status = []byte(`{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"3"}]}}`)
 				}
 				if len(out) > 0 {
 					_ = conn.WriteMessage(websocket.BinaryMessage, append([]byte{1}, out...))
@@ -119,7 +121,7 @@ func TestToolHelpersAreFixedBoundAndConfirmed(t *testing.T) {
 				return
 			}
 			err = session.PublishToolResponse(context.Background(), response)
-			if (kind == "respond") != (err == nil) {
+			if (kind == "respond") != (err == nil) || (kind == "respond-not-pending") != errors.Is(err, ErrToolNotPending) {
 				t.Fatal("publication result", err)
 			}
 		})

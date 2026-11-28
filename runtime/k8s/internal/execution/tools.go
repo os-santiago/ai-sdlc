@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/tektontasks"
@@ -29,12 +33,23 @@ type ToolRunner func(context.Context, tektontasks.ToolCall) (tektontasks.ToolRes
 
 // toolDispatch answers the generator's tool calls in order. A call is run at
 // most once: the exact last request may be observed again until the mailbox
-// consumes its answer, any other repeated or skipped sequence stops the run.
+// consumes its answer. Sequences may skip forward (the mailbox, the only
+// writer of these files, numbers calls that ended unread, for example after
+// their window passed); a repeated, rewritten or earlier sequence stops the run.
 type toolDispatch struct {
-	session  toolSession
-	run      ToolRunner
-	previous modelmailbox.Envelope
+	session toolSession
+	run     ToolRunner
+	// authorize is rechecked while a tool runs; a refusal cancels the run.
+	authorize func(context.Context) error
+	previous  modelmailbox.Envelope
 }
+
+// toolAnswerMargin is how long before the request expires the controller
+// stops a run, so its answer (or failure) reaches the mailbox in time.
+const toolAnswerMargin = 10 * time.Second
+
+// toolAuthorizeEvery is how often authority is rechecked while a tool runs.
+var toolAuthorizeEvery = 10 * time.Second
 
 // poll answers one pending tool call, if any. The generator waits for the
 // answer, so no model request is pending while a tool runs.
@@ -52,30 +67,85 @@ func (d *toolDispatch) poll(ctx context.Context) error {
 		}
 		return nil
 	}
-	if request.Sequence != d.previous.Sequence+1 {
+	if request.Sequence <= d.previous.Sequence {
 		return driveStop{"execution-tool-sequence"}
 	}
+	runCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(request.ExpiresAt).Add(-toolAnswerMargin))
+	defer cancel()
+	lost := d.watchAuthority(runCtx, cancel)
 	status, text := 200, ""
 	call, err := tektontasks.ParseToolCall(request.Payload)
 	if err == nil {
 		var result tektontasks.ToolResult
-		result, err = d.run(ctx, call)
+		result, err = d.run(runCtx, call)
 		text = result.Text()
+	}
+	cancel()
+	if lost() || ctx.Err() != nil {
+		return driveStop{"execution-authority"}
 	}
 	if err != nil {
 		status, text = toolFailure(err)
 	}
 	response := modelmailbox.Envelope{Version: modelmailbox.Version, Kind: "tool-response", Attempt: request.Attempt, PodUID: request.PodUID,
 		Sequence: request.Sequence, RequestSHA256: request.RequestSHA256, ExpiresAt: request.ExpiresAt, Status: status, Payload: toolPayload(text)}
-	if ctx.Err() != nil {
-		return driveStop{"execution-authority"}
-	}
-	if d.session.PublishToolResponse(ctx, response) != nil {
+	if err := d.session.PublishToolResponse(ctx, response); err != nil && !errors.Is(err, podtransport.ErrToolNotPending) {
 		return driveStop{"execution-tool-publish"}
 	}
+	// A call no longer pending already ended for the generator (504).
 	d.previous = request
 	d.previous.Payload = append([]byte(nil), request.Payload...)
 	return nil
+}
+
+// watchAuthority rechecks authority while a tool runs and cancels the run
+// when it is refused. Evidence that is only stale is tolerated here as in the
+// drive loop's own wait; any other refusal stops. It reports whether
+// authority was lost; the watcher ends with ctx.
+func (d *toolDispatch) watchAuthority(ctx context.Context, cancel context.CancelFunc) func() bool {
+	var lost atomic.Bool
+	if d.authorize == nil {
+		return lost.Load
+	}
+	go func() {
+		ticker := time.NewTicker(toolAuthorizeEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := d.authorize(ctx)
+				var stale interface{ EvidenceWait() time.Duration }
+				if err != nil && ctx.Err() == nil && !(errors.As(err, &stale) && stale.EvidenceWait() > 0) {
+					lost.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return lost.Load
+}
+
+// authorizeToolCall checks a call against the assignment's tool spec on the
+// controller side: the in-sandbox tools server filters the same way, but the
+// generator can reach the mailbox route directly. The tool must be declared,
+// offered (generatortools.Offered) and called with a declared target.
+func authorizeToolCall(spec *generatortools.Spec, call tektontasks.ToolCall) error {
+	if spec == nil {
+		return tektontasks.ErrRequest
+	}
+	for _, tool := range spec.Tools {
+		if tool.Name != call.Tool {
+			continue
+		}
+		if !generatortools.Offered(tool.Kind) || !slices.Contains(tool.Targets, call.Target) {
+			return tektontasks.ErrRequest
+		}
+		return nil
+	}
+	return tektontasks.ErrRequest
 }
 
 // toolFailure maps a refused or failed call to a fixed status and message.
@@ -119,7 +189,7 @@ const toolPoll = 10 * time.Second
 // assignment's manifest declares none). The manifest is the one the current
 // policy binds, and its tool spec must be exactly the assignment's: a reload
 // that changed the declared tools refuses rather than runs other tools.
-func generatorTools(ctx context.Context, prepared Prepared, load LifecycleLoader, session toolSession, cluster func() (tektontasks.Cluster, error), journal tektontasks.ToolJournal) (func(context.Context) error, error) {
+func generatorTools(ctx context.Context, prepared Prepared, load LifecycleLoader, session toolSession, cluster func() (tektontasks.Cluster, error), journal tektontasks.ToolJournal, authorize func(context.Context) error) (func(context.Context) error, error) {
 	assignmentRaw := prepared.Assignment()
 	a, err := executor.ParseAssignment(assignmentRaw, workspacebundle.Digest(assignmentRaw), time.Now())
 	if err != nil {
@@ -150,12 +220,10 @@ func generatorTools(ctx context.Context, prepared Prepared, load LifecycleLoader
 		return nil, err
 	}
 	budget := &tektontasks.ToolBudget{MaxCalls: p.Tools.Calls, MaxSeconds: p.MaxSeconds}
-	// Answer inside the mailbox's own window, so the generator receives a
-	// bounded failure rather than a bare timeout.
-	window := time.Duration(p.Tools.Seconds)*time.Second - 10*time.Second
-	dispatch := &toolDispatch{session: session, run: func(ctx context.Context, call tektontasks.ToolCall) (tektontasks.ToolResult, error) {
-		ctx, cancel := context.WithTimeout(ctx, window)
-		defer cancel()
+	dispatch := &toolDispatch{session: session, authorize: authorize, run: func(ctx context.Context, call tektontasks.ToolCall) (tektontasks.ToolResult, error) {
+		if err := authorizeToolCall(a.Tools, call); err != nil {
+			return tektontasks.ToolResult{}, err
+		}
 		return tektontasks.InvokeTool(ctx, c, journal, budget, m, call, a.SourceSHA, CIRuntimeClass, toolPoll)
 	}}
 	return dispatch.poll, nil

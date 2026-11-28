@@ -183,6 +183,11 @@ func (s *Store) WriteToolResponse(id Identity, response Envelope) error {
 		return err
 	}
 	request, err := s.ReadToolRequest(id)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrPending) {
+		// The call ended unanswered (its window passed or its caller left):
+		// the helper reports this as nothing pending (exit 3).
+		return fmt.Errorf("%w: tool request no longer pending", ErrPending)
+	}
 	if err != nil {
 		return errors.New("tool response has no valid pending request")
 	}

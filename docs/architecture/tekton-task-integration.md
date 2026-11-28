@@ -235,12 +235,20 @@ execution controller (worker) ──pods/exec read-tool──┘
   still runs under the sandbox.
 - **Where the tools come from.** The tool list is per repository: the
   controller derives it from the manifest the authorizing policy binds
-  (`execution.ToolSpecOf`, each tool with the declared Maven modules or npm
-  directories as targets) and puts it in the assignment, like the toolchain.
-  The installation's executor profile carries only the budget
-  (`tools: {calls: 1-8, seconds: 120-900}`, seconds within `maxSeconds`).
-  SCC and the mailbox offer tools only when both are present; otherwise the
-  configuration and workload are byte-identical to before.
+  (`execution.ToolSpecOf`, each offered tool with the declared Maven modules
+  as targets; npm tools are not offered until slice 3) and puts it in the
+  assignment, like the toolchain, but only when the installation's executor
+  profile has a tool budget (`tools: {calls: 1-8, seconds: 120-900}`,
+  seconds within `maxSeconds`). Without that budget the assignment,
+  configuration and workload are byte-identical to before. Before the worker
+  starts, the controller checks that the policy's manifest still declares
+  exactly the assigned tools.
+- **Candidate baseline.** The executor records the source baseline commit
+  in `refs/ai-sdlc/baseline`, outside the checked-out branch, and the tools
+  server diffs the work tree against that ref. A generator commit on its
+  branch moves the branch, not the ref, so committed changes stay in the
+  candidate (the ref is not a security boundary: the result is advisory and
+  the exported candidate is verified independently).
 - **Mailbox route.** `POST /v1/ai-sdlc/tools` exists only when the mailbox is
   started with `--tool-calls` and `--tool-wait-seconds` (from the profile).
   It accepts one call at a time, at most the budgeted number, a body of at
@@ -258,10 +266,19 @@ execution controller (worker) ──pods/exec read-tool──┘
   deleted (`ErrJournal`).
 - **Dispatch.** The controller's drive loop answers one pending tool call per
   cycle in which no model request is pending (the generator waits for the
-  tool, so none is). A repeated sequence is answered once; a skipped or
-  rewritten one stops the run. Refusals and failures map to fixed messages:
-  403 outside the manifest scope, 429 budget exhausted, 504 deadline, 500
-  failure; no cluster detail or log is forwarded.
+  tool, so none is). It authorizes every call itself against the assignment's
+  tools (declared, offered, declared target), because the generator can reach
+  the mailbox route without the tools server. A repeated sequence is answered
+  once and an earlier or rewritten one stops the run; a sequence may skip
+  forward, because the mailbox numbers calls that ended unread (their window
+  passed). A run ends ten seconds before the request expires, authority is
+  rechecked every ten seconds while it runs (a refusal cancels it and stops
+  the generation; evidence that is only stale is tolerated), and an answer
+  the mailbox no longer waits for (the helper's exit 3) is not an error: the
+  generator already received 504. Refusals and failures map to fixed
+  messages: 403 outside the assignment's tools or the manifest scope, 429
+  budget exhausted or another call running, 504 deadline, 500 failure; no
+  cluster detail or log is forwarded.
 - **Allowlist.** `tektontasks.InvokeTool` accepts only a tool named in
   `tekton.tools`, a declared target, and npm package names; repository,
   revision, services and Maven switches come from the manifest and the

@@ -12,8 +12,10 @@ import (
 )
 
 // BaselineRef is the commit the executor records over the imported source
-// before generation (internal/executor InitializeBaseline).
-const BaselineRef = "ai-sdlc-baseline"
+// before generation (internal/executor InitializeBaseline). It is a ref
+// outside the checked-out branch, so a generator commit does not move it and
+// committed changes stay in the candidate diff.
+const BaselineRef = "refs/ai-sdlc/baseline"
 
 // MaxDiffBytes bounds a candidate diff (the catalog's apply-candidate limit).
 const MaxDiffBytes = 768 * 1024

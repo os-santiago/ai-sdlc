@@ -206,6 +206,10 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	if err = addRepositoryContext(&assignment, in.Policy.ProjectSHA256); err != nil {
 		return Prepared{}, err
 	}
+	// The manifest's tools enter the assignment only when the installation's
+	// profile enables them, so the assignment of a profile without tools is
+	// unchanged.
+	assignment.Tools = toolsForProfile(in.Profile, c.ProfileSHA256, assignment.Tools)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -302,6 +306,15 @@ func WorkspaceFor(repository, projectSHA256 string) string {
 		return ""
 	}
 	return workspaceOf(m)
+}
+
+// toolsForProfile keeps the manifest's tool spec only when the installation's
+// generator profile has a tool budget.
+func toolsForProfile(profile []byte, digest string, spec *generatortools.Spec) *generatortools.Spec {
+	if p, err := executor.ParseProfile(profile, digest); err != nil || p.Tools == nil {
+		return nil
+	}
+	return spec
 }
 
 // ToolSpecOf renders the manifest's tekton.tools as the generator tool spec:

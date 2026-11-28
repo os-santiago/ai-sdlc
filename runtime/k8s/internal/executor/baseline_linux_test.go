@@ -44,6 +44,14 @@ func TestBaselineIncludesIgnoredSourceAndDisablesAmbientGit(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
 		t.Fatalf("baseline not clean: %v %s", err, out)
 	}
+	// The tools' baseline ref names the baseline commit and is not the
+	// checked-out branch, so a generator commit leaves it in place.
+	head, _ := exec.Command("/usr/bin/git", "-C", repo, "rev-parse", "HEAD").Output()
+	ref, _ := exec.Command("/usr/bin/git", "-C", repo, "rev-parse", BaselineRef).Output()
+	branch, _ := exec.Command("/usr/bin/git", "-C", repo, "symbolic-ref", "HEAD").Output()
+	if len(head) == 0 || string(head) != string(ref) || string(branch) == BaselineRef+"\n" {
+		t.Fatalf("baseline ref %q head %q branch %q", ref, head, branch)
+	}
 	b, err := workspacebundle.Export(parent, "0123456789012345678901234567890123456789")
 	if err != nil || len(b.Files) != 3 {
 		t.Fatalf("Git metadata leaked into candidate: %v", err)

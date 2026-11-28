@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 )
 
+// BaselineRef records the source baseline commit outside the checked-out
+// branch (generatortools.BaselineRef).
+const BaselineRef = "refs/ai-sdlc/baseline"
+
 // InitializeBaseline is called only after VerifySource, before repository code
 // executes. The launcher supplies fixed paths and a fresh, private emptyDir.
 // The original source SHA remains assignment metadata, not this synthetic Git
@@ -24,6 +28,10 @@ func InitializeBaseline(ctx context.Context, parent, emptyTemplate string) error
 		{"init", "--quiet", "--initial-branch=ai-sdlc-baseline", "--template=" + emptyTemplate, "--separate-git-dir=" + filepath.Join(parent, "git"), "."},
 		{"add", "--force", "--all", "--", "."},
 		{"commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "AI-SDLC source baseline"},
+		// The generator works on the checked-out branch and may commit there;
+		// generator tools diff against this ref, which no checkout or commit
+		// of the work branch moves.
+		{"update-ref", BaselineRef, "HEAD"},
 	} {
 		command := append(append([]string{}, prefix...), args...)
 		if runBounded(ctx, "/usr/bin/git", repo, env, command) != nil {

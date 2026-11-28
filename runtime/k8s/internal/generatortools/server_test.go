@@ -151,9 +151,10 @@ func TestGitCandidateDiffsAgainstTheBaselineWithoutTouchingTheIndex(t *testing.T
 		}
 	}
 	os.WriteFile(filepath.Join(repo, "A.java"), []byte("class A {}\n"), 0o644)
-	run("init", "-q", "--initial-branch="+BaselineRef)
+	run("init", "-q", "--initial-branch=ai-sdlc-baseline")
 	run("add", "-A")
 	run("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "baseline")
+	run("update-ref", BaselineRef, "HEAD")
 	os.WriteFile(filepath.Join(repo, "A.java"), []byte("class A { int x; }\n"), 0o644)
 	os.WriteFile(filepath.Join(repo, "B.java"), []byte("class B {}\n"), 0o644)
 	diff, err := GitCandidate(git, repo, scratch)(context.Background())
@@ -165,6 +166,14 @@ func TestGitCandidateDiffsAgainstTheBaselineWithoutTouchingTheIndex(t *testing.T
 	out, _ := status.Output()
 	if !strings.Contains(string(out), "?? B.java") {
 		t.Fatal("the generator's index was changed", string(out))
+	}
+	// A generator commit on its branch does not empty the candidate: the
+	// committed change is still a change against the baseline.
+	run("add", "-A")
+	run("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "generator work")
+	diff, err = GitCandidate(git, repo, scratch)(context.Background())
+	if err != nil || !strings.Contains(diff, "+class A { int x; }") || !strings.Contains(diff, "+++ b/B.java") {
+		t.Fatal("a commit emptied the candidate diff", err, diff)
 	}
 	os.WriteFile(filepath.Join(repo, "C.txt"), bytes.Repeat([]byte("x\n"), MaxDiffBytes), 0o644)
 	if _, err := GitCandidate(git, repo, scratch)(context.Background()); err == nil {
@@ -190,10 +199,11 @@ func TestGitCandidateSendsRenamesAsDeleteAndAdd(t *testing.T) {
 		}
 	}
 	os.WriteFile(filepath.Join(repo, "A.java"), []byte("class A {\n  int a;\n  int b;\n}\n"), 0o644)
-	run("init", "-q", "--initial-branch="+BaselineRef)
+	run("init", "-q", "--initial-branch=ai-sdlc-baseline")
 	run("config", "diff.renames", "copies")
 	run("add", "-A")
 	run("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "baseline")
+	run("update-ref", BaselineRef, "HEAD")
 	if err := os.Rename(filepath.Join(repo, "A.java"), filepath.Join(repo, "Moved.java")); err != nil {
 		t.Fatal(err)
 	}

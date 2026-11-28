@@ -2,6 +2,7 @@ package modelmailbox
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,10 +90,37 @@ func TestToolRouteBoundsRequestsAndTimesOut(t *testing.T) {
 	}
 	big := `{"tool":"build_test","target":"m","diff":"` + strings.Repeat("x", MaxToolRequestBytes) + `"}`
 	result(t, sendTool(httpServer, []byte(big)), 413)
-	result(t, sendTool(httpServer, []byte(toolCall)), 504)
+	done := sendTool(httpServer, []byte(toolCall))
+	expired := awaitToolRequest(t, s)
+	result(t, done, 504)
 	if _, err := s.ReadToolRequest(testIdentity); err == nil {
 		t.Fatal("an expired tool request was left behind")
 	}
+	// A late answer finds nothing pending (the helper's exit 3), which the
+	// controller treats as a call that already ended for the generator.
+	late := expired
+	late.Kind, late.Status, late.Payload, late.ExpiresAt = "tool-response", 200, []byte(`{"text":"late"}`), time.Now().Add(time.Minute).UnixMilli()
+	if err := s.WriteToolResponse(testIdentity, late); !errors.Is(err, ErrPending) {
+		t.Fatal("late answer", err)
+	}
+}
+
+// One call at a time: a second call while one is pending is refused at once
+// with tool_call_already_pending, and the pending call is unaffected.
+func TestToolRouteRefusesASecondConcurrentCall(t *testing.T) {
+	s, httpServer := setupToolServer(t, ToolLimits{MaxCalls: 3, Wait: 2 * time.Second})
+	first := sendTool(httpServer, []byte(toolCall))
+	request := awaitToolRequest(t, s)
+	second := result(t, sendTool(httpServer, []byte(toolCall)), 429)
+	if !strings.Contains(string(second.body), "tool_call_already_pending") {
+		t.Fatal("second call", string(second.body))
+	}
+	answer := request
+	answer.Kind, answer.Status, answer.Payload = "tool-response", 200, []byte(`{"text":"ok"}`)
+	if err := s.WriteToolResponse(testIdentity, answer); err != nil {
+		t.Fatal(err)
+	}
+	result(t, first, 200)
 }
 
 func TestToolRouteIsOffUnlessEnabled(t *testing.T) {

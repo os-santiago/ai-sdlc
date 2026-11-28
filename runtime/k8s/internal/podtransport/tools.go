@@ -3,6 +3,7 @@ package podtransport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -45,6 +46,10 @@ func (s *Session) ReadToolRequest(ctx context.Context) (modelmailbox.Envelope, e
 	return e, nil
 }
 
+// ErrToolNotPending is a tool answer the mailbox no longer waits for: the
+// call's window passed (the generator received 504) or its caller left.
+var ErrToolNotPending = errors.New("tool request no longer pending")
+
 // PublishToolResponse answers the pending tool request. The helper refuses a
 // response that does not match the pending request's sequence, digest and
 // expiry; success is confirmed by its receipt naming the request digest.
@@ -62,6 +67,9 @@ func (s *Session) PublishToolResponse(ctx context.Context, e modelmailbox.Envelo
 	}, raw)
 	if err != nil {
 		return publicationError{stage: "helper-transport", cause: err}
+	}
+	if code == 3 {
+		return ErrToolNotPending
 	}
 	if code != 0 {
 		return publicationError{stage: "helper-exit-" + strconv.Itoa(code), cause: ErrTransport}
