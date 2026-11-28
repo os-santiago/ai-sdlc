@@ -203,11 +203,35 @@ execution controller (worker) ──pods/exec read-tool──┘
   publishes the resulting git tree id, which the controller binds into the
   result. The ConfigMap is owned by the PipelineRun and deleted with it; if the
   owner cannot be set it is deleted at once.
-- **Who triggers.** Only the execution controller, with the adapter's RBAC in
-  `ai-sdlc-ci` (create/get/patch PipelineRuns; create/patch/delete ConfigMaps
-  named `ai-sdlc-candidate-*`). Admission admits the candidate workspace only
-  as a ConfigMap with that prefix and only for `ai-sdlc-maven-build-test` and
-  `ai-sdlc-npm-lock-update`; build-test still runs under the sandbox.
+- **Who triggers.** Only the execution controller, with the Role
+  `ai-sdlc-generator-tools` in `ai-sdlc-ci` that the runtime chart renders
+  when `candidate.generatorTools` is true (create/get/patch PipelineRuns;
+  create/patch/delete ConfigMaps). Admission admits the candidate workspace
+  only as a ConfigMap named `ai-sdlc-candidate-*` and only for
+  `ai-sdlc-maven-build-test` and `ai-sdlc-npm-lock-update`; build-test still
+  runs under the sandbox.
+- **Where the tools come from.** The tool list is per repository: the
+  controller derives it from the manifest the authorizing policy binds
+  (`execution.ToolSpecOf`, each tool with the declared Maven modules or npm
+  directories as targets) and puts it in the assignment, like the toolchain.
+  The installation's executor profile carries only the budget
+  (`tools: {calls: 1-8, seconds: 120-900}`, seconds within `maxSeconds`).
+  SCC and the mailbox offer tools only when both are present; otherwise the
+  configuration and workload are byte-identical to before.
+- **Mailbox route.** `POST /v1/ai-sdlc/tools` exists only when the mailbox is
+  started with `--tool-calls` and `--tool-wait-seconds` (from the profile).
+  It accepts one call at a time, at most the budgeted number, a body of at
+  most 800 KiB, and waits at most the profile's seconds for the answer
+  (504 after). The request and answer are their own files
+  (`tool-request.json`, `tool-response.json`, answer at most 16 KiB), read and
+  written by the fixed `read-tool` and `respond-tool` helper modes over
+  pods/exec, bound to the attempt and Pod UID like model calls.
+- **Dispatch.** The controller's drive loop answers one pending tool call per
+  cycle in which no model request is pending (the generator waits for the
+  tool, so none is). A repeated sequence is answered once; a skipped or
+  rewritten one stops the run. Refusals and failures map to fixed messages:
+  403 outside the manifest scope, 429 budget exhausted, 504 deadline, 500
+  failure; no cluster detail or log is forwarded.
 - **Allowlist.** `tektontasks.InvokeTool` accepts only a tool named in
   `tekton.tools`, a declared target, and npm package names; repository,
   revision, services and Maven switches come from the manifest and the
@@ -237,9 +261,10 @@ execution controller (worker) ──pods/exec read-tool──┘
    incompatible types: java.lang.String cannot be converted to int` with tree
    `5fa25b8e`; a harmless diff passed 94 tests with tree `6d647ccd`. A run
    without a candidate still completes (the apply task is skipped).
-2. Mailbox tool endpoint and protocol, the executor's MCP tools server, the
-   execution controller's dispatch with RBAC, the `tool_calls` migration and
-   store, and budgets in the execution profile.
+2. Mailbox tool endpoint and protocol, the executor's MCP tools server
+   (`/executor tools-mcp`), the tool spec from the bound manifest, budgets in
+   the execution profile, the execution controller's dispatch with RBAC, and
+   the `tool_calls` migration and store.
 3. `npm_lock_update` through the same path, returning the lockfile change.
 4. Flow console `tool-call` step.
 

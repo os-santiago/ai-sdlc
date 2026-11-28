@@ -1126,6 +1126,9 @@
           "type": "string",
           "maxLength": 64,
           "pattern": "^[0-9]*$"
+        },
+        "generatorTools": {
+          "type": "boolean"
         }
       }
     },

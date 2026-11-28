@@ -252,6 +252,24 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
         self.assertNotIn('sandbox-runtime-class', maintenance.stdout)
 
+    def test_generator_tools_role_is_opt_in_and_scoped_to_the_ci_namespace(self):
+        profile = str(ROOT / 'runtime/k8s/deploy/local/profiles/candidate.json')
+        plain = self.render('-f', profile)
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertNotIn('ai-sdlc-generator-tools', plain.stdout)
+        enabled = self.render('-f', profile, '--set', 'candidate.generatorTools=true')
+        self.assertEqual(enabled.returncode, 0, enabled.stderr)
+        docs = [d for d in yaml.safe_load_all(enabled.stdout) if d and d['metadata'].get('name') == 'ai-sdlc-generator-tools']
+        self.assertEqual(sorted((d['kind'], d['metadata']['namespace']) for d in docs), [('Role', 'ai-sdlc-ci'), ('RoleBinding', 'ai-sdlc-ci')])
+        role = next(d for d in docs if d['kind'] == 'Role')
+        self.assertEqual(role['rules'], [{'apiGroups': ['tekton.dev'], 'resources': ['pipelineruns'], 'verbs': ['create', 'get', 'patch']},
+                                         {'apiGroups': [''], 'resources': ['configmaps'], 'verbs': ['create', 'patch', 'delete']}])
+        binding = next(d for d in docs if d['kind'] == 'RoleBinding')
+        self.assertEqual(binding['subjects'], [{'kind': 'ServiceAccount', 'name': 'ai-sdlc-execution-controller', 'namespace': 'ai-sdlc-runtime'}])
+        maintenance = self.render('--set', 'candidate.generatorTools=true')
+        self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
+        self.assertNotIn('ai-sdlc-generator-tools', maintenance.stdout)
+
     def test_configured_sandbox_runtime_class_must_match_installed_documents(self):
         kata = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata'}})}}
         default = {'candidate': {'configJSON': json.dumps({'placement': {}})}}
