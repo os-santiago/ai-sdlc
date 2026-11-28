@@ -515,6 +515,7 @@ def _main(argv, stack):
     parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
     parser.add_argument('--tekton-ci-candidate-pods', type=int, help='Tekton CI candidate-code (build-test) pods that may run at once (1-32, default 1); checked against the node pid budget')
     parser.add_argument('--tekton-ci-fetch-pods', type=int, help='Tekton CI fetch pods that may run at once (1-32, default 1); checked against the node pid budget')
+    parser.add_argument('--shared-storage', action='store_true', default=None, help='Create the kind cluster with one host directory shared by every node, served as the ReadWriteMany StorageClass ai-sdlc-shared for the Tekton CI caches and sealed dependency caches, so CI and cached verifications spread over the workers; requires --workers; set at creation (docs/operations/kind-node-resources.md)')
     parser.add_argument('--workers', type=int, help='Worker nodes of a new kind cluster (0-4, default 0: one node as before); sandboxed and CI pods then run only on the workers (docs/operations/kind-node-resources.md)')
     parser.add_argument('--node-pids-limit', type=int, help='Pid limit of each kind node container (default 8192, or a quarter of the host pid_max or threads-max when smaller; without the option a larger limit already set is kept); kind only (docs/operations/kind-node-resources.md)')
     parser.add_argument('--node-memory', help='Optional memory cap of each kind node that runs sandboxed pods (the single node, or each worker), for example 12g; off by default; kind only')
@@ -558,16 +559,21 @@ def _main(argv, stack):
     kind_nodes.validate_workers(args.workers)
     if args.workers is not None and (args.platform != 'kind' or args.command not in ('plan', 'local', 'sandbox')):
         raise ValueError('--workers requires plan, local or sandbox on the kind platform')
+    if args.shared_storage and (args.platform != 'kind' or args.command not in ('plan', 'local')):
+        raise ValueError('--shared-storage requires plan or local on the kind platform')
+    if args.shared_storage and args.workers == 0:
+        raise ValueError('--shared-storage needs workers')
 
-    def capacity(workers, installed=None, sandboxed=None, limit=None, lowering=False, running=None):
+    def capacity(workers, installed=None, sandboxed=None, limit=None, lowering=False, running=None, shared=None):
         # The nodes must hold their baseline, one verification run when
         # sandboxed execution is installed, and every CI pod the quotas admit.
         # Which quotas: when this run lowers a node limit, both the installed
         # and the requested ones (the installed ones stay until Tekton CI is
         # reapplied, or forever if --tekton-ci is omitted); otherwise the
         # requested ones, or the installed ones when --tekton-ci is omitted.
+        shared = bool(args.shared_storage) if shared is None else shared
         quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods,
-                                              workers) if args.tekton_ci else None
+                                              workers, shared) if args.tekton_ci else None
         installed = installed or {'candidate': 0, 'fetch': 0}
         running = running or {}
         if lowering or quotas is None:
@@ -577,10 +583,11 @@ def _main(argv, stack):
             counted = {k: max(running.get(k, 0), quotas[k]) for k in ('candidate', 'fetch')}
         budget = kind_nodes.pid_budget(limit or node_resources['pidsLimit'],
                                        sandbox=args.profile in ('candidate', 'verification') if sandboxed is None else sandboxed,
-                                       candidate_pods=counted['candidate'], fetch_pods=counted['fetch'], workers=workers)
+                                       candidate_pods=counted['candidate'], fetch_pods=counted['fetch'], workers=workers,
+                                       shared=shared)
         return quotas, budget
     tekton_quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods,
-                                                 args.workers or 0) if args.tekton_ci else None
+                                                 args.workers or 0, bool(args.shared_storage)) if args.tekton_ci else None
     node_budget = None
     if node_resources is not None and args.command == 'plan':
         # local checks before creating a cluster, and a reinstall checks
@@ -779,8 +786,14 @@ def _main(argv, stack):
             config = LOCAL / 'kind.yaml'
             if args.workers:
                 # kind.yaml plus the workers; written beside the kubeconfig.
+                shared_dir = None
+                if args.shared_storage:
+                    # Only the installing user can reach the shared caches on the host.
+                    shared_dir = state / 'shared'
+                    shared_dir.mkdir(mode=0o700, exist_ok=True)
+                    shared_dir.chmod(0o700)
                 config = state / 'kind-cluster.yaml'
-                config.write_text(kind_nodes.cluster_config(args.workers))
+                config.write_text(kind_nodes.cluster_config(args.workers, shared_dir))
             run([kind, 'create', 'cluster', '--name', args.cluster, '--config', config,
                  '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
         run([kind, 'export', 'kubeconfig', '--name', args.cluster, '--kubeconfig', kubeconfig], env=env)
@@ -805,6 +818,12 @@ def _main(argv, stack):
         if args.workers is not None and len(nodes['workers']) != args.workers:
             raise ValueError('The cluster has %d workers; kind cannot change that, so use another --cluster'
                              % len(nodes['workers']))
+        # Shared storage is a mount fixed at creation, like the workers.
+        nodes['shared'] = bool(nodes['workers']) and kind_nodes.shared_mounted(
+            run, provider, [nodes['controlPlane']] + nodes['workers'])
+        if args.shared_storage and not nodes['shared']:
+            raise ValueError('The cluster was created without --shared-storage; kind cannot add the mount, so use '
+                             'another --cluster')
         # The budget covers both the quotas in the cluster and any requested
         # change, so it holds before, during and after this reconciliation,
         # and whether or not this run reapplies Tekton CI. Sandboxed pods are
@@ -819,7 +838,8 @@ def _main(argv, stack):
         limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources, names)
         lowering = kind_nodes.lowers_limit(run, provider, names, node_resources)
         running = tekton_ci_install.installed_pod_quotas(run, kubectl, used_only=True)
-        quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed, limit, lowering, running)
+        quotas, node_budget = capacity(len(nodes['workers']), installed, sandboxed, limit, lowering, running,
+                                       nodes['shared'])
         if args.command == 'local':
             tekton_quotas = quotas
         for worker in nodes['workers']:
@@ -830,7 +850,12 @@ def _main(argv, stack):
         # Set on creation and reconciled on every later install: podman's
         # default node pid limit (2048) is too small (#859).
         report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources, nodes)
-        kind_nodes.schedule(run, kubectl, nodes, kind_nodes.ci_worker(run, kubectl, nodes))
+        if nodes['shared']:
+            import shared_storage
+            print(json.dumps({'sharedStorage': shared_storage.configure(run, kubectl, args.timeout)}), file=sys.stderr)
+            kind_nodes.schedule(run, kubectl, nodes, shared=True)
+        else:
+            kind_nodes.schedule(run, kubectl, nodes, kind_nodes.ci_worker(run, kubectl, nodes))
         if nodes['workers']:
             import offline_runtime
             # The scheduler's per-worker pod cap follows each worker's limit
@@ -994,13 +1019,16 @@ def _main(argv, stack):
         # The same conformance on the workers, where sandboxed pods run.
         worker_network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'],
                                               placement={'nodeSelector': {kind_nodes.ROLE_LABEL: kind_nodes.ROLE_SANDBOX},
-                                                         'tolerations': [kind_nodes.toleration()]})
+                                                         'tolerations': [kind_nodes.toleration()]},
+                                              # A fresh worker first pulls the probe image.
+                                              ready_seconds=300)
     # After the runtime is ready: a Tekton failure leaves the runtime intact
     # and the owned Tekton state in place for reapplication.
     tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout,
                                           args.tekton_ci_repository or [args.repository.lower()],
                                           tekton_quotas,
-                                          kind_nodes.tekton_pod_template() if nodes and nodes['workers'] else None) if args.tekton_ci else None
+                                          kind_nodes.tekton_pod_template(nodes['shared']) if nodes and nodes['workers'] else None,
+                                          kind_nodes.SHARED_CLASS if nodes and nodes.get('shared') else None) if args.tekton_ci else None
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
@@ -1020,6 +1048,7 @@ def _main(argv, stack):
               **({'tektonCI': tekton_ci} if tekton_ci else {}),
               **({'nodeResources': {'nodes': node_report['nodes'], 'pidBudget': node_budget,
                                     'controlPlane': nodes['controlPlane'], 'workers': nodes['workers'],
+                                    'sharedStorage': nodes.get('shared', False),
                                     'nodeAddresses': node_report['addresses']}} if node_report else {}),
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

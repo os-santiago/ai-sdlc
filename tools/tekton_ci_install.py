@@ -61,12 +61,18 @@ def cache_claim(repository):
     return CACHE_PREFIX + hashlib.sha256(repository.encode()).hexdigest()[:16]
 
 
-def cache_claims(repositories):
+def cache_claims(repositories, storage_class=None):
+    """Node-local ReadWriteOnce claims by default; with a shared
+    (ReadWriteMany) class, claims every sandbox node can mount."""
+    spec = {'accessModes': ['ReadWriteMany' if storage_class else 'ReadWriteOnce'],
+            'resources': {'requests': {'storage': CACHE_SIZE}}}
+    if storage_class:
+        spec['storageClassName'] = storage_class
     return [{'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
              'metadata': {'name': cache_claim(r), 'namespace': CI_NAMESPACE,
                           'labels': {'app.kubernetes.io/part-of': 'ai-sdlc'},
                           'annotations': {'ai-sdlc.io/repository': r}},
-             'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': CACHE_SIZE}}}}
+             'spec': dict(spec)}
             for r in sorted(set(repositories))]
 
 
@@ -253,12 +259,15 @@ def desired_ci(items, cluster_uid):
     return own(items, cluster_uid)
 
 
-def pod_quotas(candidate=None, fetch=None, workers=0):
+def pod_quotas(candidate=None, fetch=None, workers=0, shared=False):
     """The reviewed pod quotas, one candidate and one fetch pod by default.
-    They do not grow with workers: every CI pod runs on the one node that
-    holds the node-local CI volumes (the single node, or the CI worker)."""
-    quotas = {'candidate': DEFAULT_PODS['candidate'] if candidate is None else candidate,
-              'fetch': DEFAULT_PODS['fetch'] if fetch is None else fetch}
+    With node-local caches they do not grow with workers: every CI pod runs
+    on the one node that holds them (the single node, or the CI worker).
+    With shared (ReadWriteMany) caches CI pods spread over the workers, and
+    the defaults are one of each per worker."""
+    nodes = max(1, workers) if shared else 1
+    quotas = {'candidate': DEFAULT_PODS['candidate'] * nodes if candidate is None else candidate,
+              'fetch': DEFAULT_PODS['fetch'] * nodes if fetch is None else fetch}
     if any(type(v) is not int or not 1 <= v <= MAX_PODS for v in quotas.values()):
         raise ValueError('Tekton CI pod quotas must be integers from 1 to %d' % MAX_PODS)
     return quotas
@@ -418,12 +427,12 @@ def plan():
             'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
-def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None, pod_template=None):
+def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None, pod_template=None, cache_storage_class=None):
     quotas = quotas or pod_quotas()
     lock, lock_digest = lockfile()
     config, config_digest = configuration()
     ci_raw, ci_digest = ci_manifests()
-    claims = cache_claims(repositories)
+    claims = cache_claims(repositories, cache_storage_class)
     raw = fetch_release(cache, lock)
     verify_release(raw, lock)
     tekton = desired_tekton(objects(run, kubectl, raw), lock, config, cluster_uid, pod_template)

@@ -46,9 +46,11 @@ def policy(namespace, name, selector, direction, rules):
                      'policyTypes': [direction], direction.lower(): rules}}
 
 
-def verify(kubectl, image, runner=None, placement=None):
+def verify(kubectl, image, runner=None, placement=None, ready_seconds=90):
     """placement (nodeSelector and tolerations) runs the probe pods on
-    chosen nodes, for example the workers of a multi-node kind cluster."""
+    chosen nodes, for example the workers of a multi-node kind cluster.
+    ready_seconds bounds the wait for the probe pods, which on a fresh node
+    includes pulling the probe image."""
     runner = runner or subprocess.run
     namespace = 'ai-sdlc-netcheck-' + secrets.token_hex(6)
     uid = None
@@ -56,7 +58,7 @@ def verify(kubectl, image, runner=None, placement=None):
     def call(args, value=None):
         result = runner([str(v) for v in kubectl] + args, text=True,
                                 input=json.dumps(value) if value is not None else None,
-                                capture_output=True, timeout=100)
+                                capture_output=True, timeout=max(100, ready_seconds + 10))
         if result.returncode:
             raise ValueError('Network-policy conformance command failed')
         return result.stdout
@@ -95,7 +97,7 @@ def verify(kubectl, image, runner=None, placement=None):
             if placement:
                 value['spec'].update(placement)
             apply(value)
-        call(['-n', namespace, 'wait', '--for=condition=Ready', 'pods', '--all', '--timeout=90s'])
+        call(['-n', namespace, 'wait', '--for=condition=Ready', 'pods', '--all', '--timeout=%ds' % ready_seconds])
         servers = [call(['-n', namespace, 'get', 'pod', name, '-o', 'jsonpath={.status.podIP}']).strip()
                    for name in ('server-a', 'server-b')]
         if not all(servers):

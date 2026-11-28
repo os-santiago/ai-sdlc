@@ -198,6 +198,57 @@ More workers add room for the other sandboxed pods (executors and reviewers),
 separate pid and cgroup limits, and isolation of the control-plane, which
 keeps its own baseline and runs no sandboxed pod.
 
+**Shared storage (`--shared-storage`).** With node-local caches, every CI
+pod and every cached verification runs on the one CI worker, so CI capacity
+grows only with that worker's pid limit. `./install.sh local --workers N
+--shared-storage` creates the cluster so that the caches can follow the work
+to any worker:
+
+- **Mount.** Every node, the control-plane included, mounts one host directory
+  at `/var/local/ai-sdlc-shared`. The directory is `<state>/shared` (for
+  example `~/.local/state/ai-sdlc/<cluster>/shared`), created with mode 0700,
+  so other host users cannot read the caches. kind cannot add a mount later:
+  the option applies when the cluster is created, a reinstall detects the
+  mount, and asking for it on a cluster created without it is refused.
+- **StorageClass.** kind's own local-path provisioner serves that directory as
+  the ReadWriteMany StorageClass `ai-sdlc-shared`, through its
+  `storageClassConfigs` `sharedFileSystemPath` setting. The installer adds the
+  entry, lists kind's `standard` class with its node-local paths (the
+  provisioner refuses classes it does not list once that setting exists),
+  restarts the provisioner, and creates the class. Each claim gets its own
+  subdirectory. Its PersistentVolume has no node affinity, so pods on any
+  node can mount it. No NFS client or kernel module is involved; the nodes
+  share the host's filesystem directly. Everything else, including the
+  runtime database and each run's source claim, stays on the node-local
+  `standard` class.
+- **Tekton CI.** The repository Maven caches are created as ReadWriteMany
+  `ai-sdlc-shared` claims. Tekton's default pod template selects every
+  sandbox worker instead of one CI worker, and the CI admission policy admits
+  exactly that placement as well. A run's pods follow its node-local source
+  claim to the worker where its checkout pod ran, and every worker can mount
+  the cache, so concurrent runs spread over the workers. The candidate and
+  fetch quotas default to one of each per worker. The pid budget checks one
+  verification run plus the quotas against all the workers together, while
+  each worker's kubelet `maxPods` still caps that worker at its own pid limit.
+- **Sealed dependency caches.** Create the work claim with
+  `tools/dependency_cache_install.py prepare --storage-class ai-sdlc-shared
+  --access-mode ReadWriteMany`. `seal` hands the volume over unchanged, and
+  the three verification pods of a request can then run on different
+  workers.
+- **Security.** The guarantees of the node-local layout hold:
+  - Candidate code mounts caches only read-only (CI admission policy), and
+    verification mounts its sealed claim read-only.
+  - Only `maven-dependencies`, an administrator-only pipeline on trusted
+    inputs, writes a cache.
+  - Each repository's cache and each dependency key are separate claims in
+    separate subdirectories. A pod can reach only the subdirectory of a claim
+    it mounts, never its siblings or the shared root.
+  - On the host the caches are protected only by the 0700 directory, and the
+    provisioner creates claim subdirectories world-writable inside it: do not
+    loosen the parent directory's mode.
+  - Deleting a claim deletes its subdirectory (reclaim policy Delete), except
+    that a sealed cache keeps the policy `seal` restores.
+
 **Host services.** Pods reach the host through SNAT to their node's address,
 so a host service that allowlists client addresses (the local model service's
 `allowedClients`) must allow every node. The installer prints the addresses

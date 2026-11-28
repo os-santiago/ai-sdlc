@@ -207,6 +207,12 @@ node (for example local-path). On a multi-node cluster with network block
 storage they fail with Multi-Attach errors; use a ReadWriteMany class (NFS,
 CephFS, a cloud file service).
 
+On a kind cluster created with `--workers --shared-storage`, use `prepare
+--storage-class ai-sdlc-shared --access-mode ReadWriteMany`: the sealed
+volume has no node affinity, and the verification runs of one request can
+run on different workers (see
+[shared storage](kind-node-resources.md#worker-nodes)).
+
 On a local kind cluster created with `--workers` (see
 [kind node resources](kind-node-resources.md#worker-nodes)), local-path
 volumes stay ReadWriteOnce and node-bound. The Tekton fill runs on the CI

@@ -62,7 +62,10 @@ Reference measurements on the sample repositories are in
   verification runs on one CI worker), so verification load does not starve
   the control-plane, the runtime database or the API server.
   It applies when the cluster is created. The installer prints every node IP;
-  a host model service that allowlists clients must allow each one.
+  a host model service that allowlists clients must allow each one. Add
+  `--shared-storage` to share the CI and dependency caches between workers
+  (ReadWriteMany through one host directory), so CI and cached verifications
+  spread over all workers.
 - **One repository per cluster.** The installer refuses to change the
   repository of an existing installation. To try another repository, use
   another `--cluster` name.

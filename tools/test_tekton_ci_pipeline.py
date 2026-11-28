@@ -79,6 +79,11 @@ def termination_message(summary):
             '{"key":"StartedAt","value":"2026-11-27T21:18:36.996Z","type":3}]').encode()
 
 
+def kind_nodes_module():
+    import kind_nodes
+    return kind_nodes
+
+
 class GoMarshalEmulationTests(unittest.TestCase):
     def test_emulation_matches_known_go_output(self):
         # Reference encodings of encoding/json.Marshal for these strings.
@@ -971,7 +976,9 @@ class RunToolTests(unittest.TestCase):
 
     def test_admission_admits_only_the_exact_ci_worker_placement(self):
         rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
-        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'}", rules)
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/ci-node': 'true'} ||", rules)
+        self.assertIn("object.spec.taskRunTemplate.podTemplate.nodeSelector == {'ai-sdlc.io/node-role': 'sandbox'})", rules)
+        self.assertEqual(kind_nodes_module().tekton_pod_template(True)['nodeSelector'], {'ai-sdlc.io/node-role': 'sandbox'})
         self.assertIn("object.spec.taskRunTemplate.podTemplate.tolerations == [{'key': 'ai-sdlc.io/sandbox', 'operator': 'Equal', "
                       "'value': 'true', 'effect': 'NoSchedule'}]", rules)
         import kind_nodes

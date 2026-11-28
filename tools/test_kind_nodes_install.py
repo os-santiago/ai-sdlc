@@ -416,6 +416,14 @@ class WorkerTopologyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             network_probe.verify(['kubectl'], 'image', runner=runner)
         self.assertTrue(all('nodeSelector' not in v['spec'] for v in applied))
+        waits = []
+        def timed(args, input=None, timeout=None, **k):
+            if 'wait' in args and '--for=condition=Ready' in args:
+                waits.append((args[-1], timeout))
+            return runner(args, input=input, **k)
+        with self.assertRaises(ValueError):
+            network_probe.verify(['kubectl'], 'image', runner=timed, placement=placement, ready_seconds=300)
+        self.assertEqual(waits, [('--timeout=300s', 310)])
 
     def test_lowering_a_worker_needs_room_for_its_admitted_pods(self):
         def runner(pods):
@@ -498,7 +506,7 @@ class InstallerWiringTests(unittest.TestCase):
         pass
 
     def drive(self, argv, installed_candidate=0, runtime_class=False, installed_fetch=0, node_limit=8192, existing=True,
-              calls=None, workers=0, full=None, running_candidate=0):
+              calls=None, workers=0, full=None, running_candidate=0, shared=False):
         import os
         import subprocess
         import offline_runtime
@@ -521,6 +529,9 @@ class InstallerWiringTests(unittest.TestCase):
                 role = 'control-plane' if argv_[-1].endswith('control-plane') else 'worker'
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'PidsLimit': node_limit}) + '|' + json.dumps(
                     {'io.x-k8s.kind.cluster': 'c', 'io.x-k8s.kind.role': role}))
+            if argv_[:2] == ['podman', 'inspect'] and argv_[3] == '{{json .Mounts}}':
+                return subprocess.CompletedProcess(argv_, 0, json.dumps(
+                    [{'Destination': kind_nodes.SHARED_PATH}] if shared else []))
             if 'resourcequota' in argv_:
                 return subprocess.CompletedProcess(argv_, 0, json.dumps({'items': [
                     {'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': str(installed_candidate)}},
@@ -553,8 +564,11 @@ class InstallerWiringTests(unittest.TestCase):
             extra.enter_context(patch.object(offline_runtime, 'reconcile_max_pods',
                                              side_effect=lambda *a: full.setdefault('maxPods', []).append(a[3])))
             extra.enter_context(patch.object(network_probe, 'verify',
-                                             side_effect=lambda *a, **k: full.setdefault('probes', []).append(k.get('placement')) or {}))
+                                             side_effect=lambda *a, **k: full.setdefault('probes', []).append(k.get('placement')) or full.setdefault('waits', []).append(k.get('ready_seconds', 90)) or {}))
             extra.enter_context(patch.object(tekton_ci_install, 'install', side_effect=tekton))
+            import shared_storage
+            extra.enter_context(patch.object(shared_storage, 'configure',
+                                             side_effect=lambda *a: full.setdefault('shared', True) and {}))
         policy = {'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'uid'}},
                   'data': {'policy.json': json.dumps({'repository': 'os-santiago/ai-sdlc', 'environment': 'ai-sdlc-production'})}}
         with tempfile.TemporaryDirectory() as directory:
@@ -585,6 +599,7 @@ class InstallerWiringTests(unittest.TestCase):
         self.assertIsNone(single['tekton'][7])
         self.assertNotIn('maxPods', single)
         self.assertEqual(single['probes'], [None])
+        self.assertEqual(full['waits'], [90, 300], 'a fresh worker first pulls the probe image')
 
     def test_lowering_workers_checks_their_admitted_pods_first(self):
         with patch.object(kind_nodes, 'admitted_pods_fit', side_effect=ValueError('admitted pods')) as fit:
@@ -593,6 +608,23 @@ class InstallerWiringTests(unittest.TestCase):
             self.assertEqual(fit.call_args.args[2:], ('c-worker', 8192))
             with self.assertRaises(self.Reached):
                 self.drive(['local'], workers=2, node_limit=16384)  # a default keeps 16384: nothing is lowered
+
+    def test_shared_storage_spreads_ci_with_rwx_caches(self):
+        full = {}
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], workers=2, full=full, shared=True)
+        self.assertTrue(full['shared'])
+        self.assertEqual(full['tekton'][7], kind_nodes.tekton_pod_template(True))
+        self.assertEqual(full['tekton'][8], kind_nodes.SHARED_CLASS)
+        self.assertEqual(full['tekton'][6], {'candidate': 2, 'fetch': 2}, 'quotas scale with workers')
+        plain = {}
+        with self.assertRaises(self.Reached):
+            self.drive(['local', '--tekton-ci'], workers=2, full=plain)
+        self.assertNotIn('shared', plain)
+        self.assertIsNone(plain['tekton'][8])
+        self.assertEqual(plain['tekton'][6], {'candidate': 1, 'fetch': 1})
+        with self.assertRaisesRegex(ValueError, 'without --shared-storage'):
+            self.drive(['local', '--shared-storage'], workers=2)
 
     def test_a_different_worker_count_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'kind cannot change'):
