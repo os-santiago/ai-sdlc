@@ -289,7 +289,7 @@ func scan(input io.Reader, hash bool, visit func(File) error) (Summary, []entry,
 	if _, e := d.Token(); e != io.EOF {
 		return s, nil, ErrInvalid
 	}
-	if checkTree(names) != nil {
+	if checkTree(names) != nil || canonicalSize(s.SourceSHA, entries) > MaxWireBytes {
 		return s, nil, ErrInvalid
 	}
 	s.Files = len(entries)
@@ -366,6 +366,24 @@ func EncodeTo(w io.Writer, b Bundle) error {
 		}
 	}
 	return enc.end()
+}
+
+// canonicalSize is len(Encode) of a tree known by its entries. Input may use
+// shorter escapes than the canonical encoding (a literal '<' instead of
+// \u003c), so a document within MaxWireBytes can re-encode over it; readers
+// refuse such a tree as Encode and the export would.
+func canonicalSize(sourceSHA string, entries []entry) int {
+	size := len(headerBytes(sourceSHA)) + len("]}")
+	for i, f := range entries {
+		if i > 0 {
+			size++
+		}
+		size += fileSize(File{Path: f.path, Mode: f.mode}) + base64.StdEncoding.EncodedLen(f.size)
+		if size > MaxWireBytes {
+			return size
+		}
+	}
+	return size
 }
 
 // EncodedSize returns len(Encode(b)) without encoding: callers can check the
@@ -507,6 +525,11 @@ func (w *wireReader) Read(p []byte) (int, error) {
 		return 0, w.err
 	}
 	n, err := w.r.Read(p)
+	if err != nil && err != io.EOF {
+		// Kept even when the decoder never asks again: a read error is a
+		// refusal however complete the bytes before it looked.
+		w.err = ErrInvalid
+	}
 	w.n += n
 	if w.n > MaxWireBytes {
 		w.err = ErrInvalid

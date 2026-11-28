@@ -25,10 +25,10 @@ func (c Candidate) WorkerExitCode() int32 { return c.exitCode }
 // tree digest, file count and named source commit, all untrusted.
 func (c Candidate) Summary() (workspacebundle.Summary, error) { return workspacebundle.Inspect(c.raw) }
 
-// exportFrames bounds the WebSocket messages of one export. The API server
-// relays stdout in chunks of at least 4 KiB in practice, so the frame budget
-// keeps the earlier ratio of one frame per 4 KiB of MaxWireBytes.
-const exportFrames = workspacebundle.MaxWireBytes / 4096
+// exportFrames bounds the WebSocket messages of one export that carry no
+// bytes. Messages with data are bounded by MaxWireBytes itself, so no
+// minimum chunk size is assumed for the API server's relay.
+const exportFrames = 8192
 
 // WorkerExit observes only the originally bound worker instance. It invokes no
 // helper and does not make a candidate trustworthy or grant execution authority.

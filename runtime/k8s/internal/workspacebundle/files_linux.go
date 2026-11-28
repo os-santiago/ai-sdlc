@@ -2,7 +2,6 @@ package workspacebundle
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -115,8 +114,14 @@ func ImportFrom(parent string, input io.Reader, expectedDigest, sourceSHA string
 		return Summary{}, ErrInvalid
 	}
 	unix.Close(staging)
-	if unix.Renameat(fd, stagingName, fd, "repository") != nil || unix.Fsync(fd) != nil {
+	if unix.Renameat(fd, stagingName, fd, "repository") != nil {
 		removeTree(fd, stagingName)
+		return Summary{}, ErrInvalid
+	}
+	// An error after the rename must not leave repository published: remove
+	// it, so the failure is a clean refusal and a retry can import again.
+	if unix.Fsync(fd) != nil {
+		removeTree(fd, "repository")
 		return Summary{}, ErrInvalid
 	}
 	return summary, nil
@@ -281,15 +286,12 @@ func walkTree(parent, sourceSHA string, visit func(File) error, done ...func() e
 	// The wire size is known from the listing too (JSON escaping can grow a
 	// path sixfold), so an encoding over MaxWireBytes is refused here, with
 	// its reason, before anything is read or written.
-	wire := len(headerBytes(sourceSHA)) + len("]}")
+	sized := make([]entry, len(files))
 	for i, f := range files {
-		if i > 0 {
-			wire++
-		}
-		wire += fileSize(File{Path: f.path, Mode: f.mode}) + base64.StdEncoding.EncodedLen(int(f.st.Size))
-		if wire > MaxWireBytes {
-			return exportRefused{ExportTotalSize}
-		}
+		sized[i] = entry{path: f.path, mode: f.mode, size: int(f.st.Size)}
+	}
+	if canonicalSize(sourceSHA, sized) > MaxWireBytes {
+		return exportRefused{ExportTotalSize}
 	}
 	buffer := make([]byte, 0, 64*1024)
 	for _, f := range files {

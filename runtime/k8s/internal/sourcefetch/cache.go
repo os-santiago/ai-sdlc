@@ -143,6 +143,11 @@ func (c *Cache) Fetch(ctx context.Context, repository, sha string) (workspacebun
 	if ctx.Err() != nil || bundle.SourceSHA != sha || bundle.Validate() != nil {
 		return workspacebundle.Bundle{}, ErrSource
 	}
+	// A tree within the content bound can still encode over the wire bound
+	// (JSON escapes some path characters sixfold); every consumer encodes it.
+	if _, e := workspacebundle.EncodedSize(bundle); e != nil {
+		return workspacebundle.Bundle{}, ErrSource
+	}
 	kept := cloneBundle(bundle)
 	c.repository, c.sha, c.bundle = repository, sha, &kept
 	c.failure = nil

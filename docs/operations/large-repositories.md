@@ -22,7 +22,7 @@ every component, helper image and database check agrees on them.
 | Files plus directories | 8,192 | 32,768 | `workspacebundle.MaxNodes` |
 | Compressed source archive | 32 MiB | 96 MiB | `sourcefetch.MaxArchiveBytes` |
 | Expanded tar stream | 32 MiB | 161 MiB | `sourcefetch.MaxExpandedArchiveBytes` |
-| Export WebSocket messages | 8,192 | 49,152 | `podtransport.exportFrames` |
+| Exec messages without data, per exchange | 8,192 (all messages) | 8,192 (empty messages only; data messages are bounded by bytes) | `podtransport.exportFrames` |
 | Recorded source and export size | 33,554,432 | 201,326,592 | migration `0041_large_workspace_bounds.sql` |
 
 The wire bound is the base64 of the content bound (4/3) plus about 1.3 KiB of
@@ -102,13 +102,20 @@ count CPU and memory, and no container in those namespaces changes memory.
 Time bounds are unchanged. A 96 MiB archive within the 30-second fetch needs
 about 3.2 MiB/s from the forge; a 192 MiB document within a 30-second import or
 export exchange needs about 6.4 MiB/s through the Kubernetes API server. The
-reference repository needs a seventh of that. A slower link fails closed at the
+reference repository needs about 0.9 MiB/s for its 27 MB archive and about
+1.6 MiB/s for its 49,191,846-byte document, roughly a quarter of the worst
+case. A slower link fails closed at the
 named fetch, import or export step, with no partial checkout.
 
 ## Security properties kept
 
-- Every bound is still checked while parsing, before allocating a decoded
-  body, and again on the decoded tree; only the numbers changed.
+- Every bound is still checked; only the numbers changed. When each check
+  runs: the base64 length of a file is checked before its decoded body is
+  allocated; the file count, the running content total and duplicate paths
+  are checked after each file is decoded; the node count, file/directory
+  conflicts and the canonical wire size (a literal `<` re-encodes as six
+  bytes) are checked once the document ends, before anything is published.
+  The decoded tree is validated again.
 - Paths, modes, duplicate and file/directory conflicts, links, special nodes
   and the `.git` rules are unchanged, for archives, imports and exports.
 - The import helper verifies the wire SHA-256 and source commit before the

@@ -67,7 +67,9 @@ func PlanTestsRunTree(client *Client, p repositorytests.Pod, admission RuntimeCl
 	if _, err := workspacebundle.EncodedSize(tree); err != nil {
 		return nil, ErrTransport
 	}
-	tree = workspacebundle.Bundle{Version: tree.Version, SourceSHA: tree.SourceSHA, Files: append([]workspacebundle.File(nil), tree.Files...)}
+	files := make([]workspacebundle.File, len(tree.Files))
+	copy(files, tree.Files)
+	tree = workspacebundle.Bundle{Version: tree.Version, SourceSHA: tree.SourceSHA, Files: files}
 	w, err := repositorytests.CompilePod(p)
 	if err != nil {
 		return nil, ErrTransport

@@ -2,6 +2,7 @@ package workspacebundle
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -126,8 +127,12 @@ func peakHeap(t *testing.T, fn func() error) uint64 {
 		}
 	}()
 	err := fn()
+	// A last sample after fn, while its result is still referenced by the
+	// caller, so a fast fn cannot finish between two samples.
+	var last runtime.MemStats
+	runtime.ReadMemStats(&last)
 	close(stop)
-	peak := <-done
+	peak := max(<-done, last.HeapInuse)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +160,7 @@ func TestStreamingReadersDoNotCopyTheTree(t *testing.T) {
 		t.Fatalf("measure too weak: Decode peak %d below content %d", peak, content)
 	}
 	t.Logf("decode: %d bytes in use for %d bytes of content (%d on the wire)", peak, content, len(raw))
+	runtime.KeepAlive(kept)
 	const bound = 8 * MaxFileBytes
 	kept = Bundle{}
 	parent := t.TempDir()
@@ -372,5 +378,68 @@ func TestExportRefusesAnOversizedEncodingBeforeWriting(t *testing.T) {
 	var out bytes.Buffer
 	if err := ExportTo(parent, b.SourceSHA, &out); RefusalReason(err) != ExportTotalSize || out.Len() != 0 {
 		t.Fatal("oversized encoding not refused before writing", err, out.Len())
+	}
+}
+
+// A read error is a refusal even when the bytes before it complete a valid
+// document and the decoder never reads again.
+func TestImportFromRefusesAReadError(t *testing.T) {
+	b := fixture()
+	raw, _ := Encode(b)
+	parent := t.TempDir()
+	input := &errorAfter{data: raw}
+	if _, err := ImportFrom(parent, input, Digest(raw), b.SourceSHA); err == nil {
+		t.Fatal("import published despite a read error")
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "repository")); !os.IsNotExist(err) {
+		t.Fatal("repository published after a read error")
+	}
+}
+
+// errorAfter returns all its bytes together with a non-EOF error, then EOF.
+type errorAfter struct{ data []byte }
+
+func (e *errorAfter) Read(p []byte) (int, error) {
+	if len(e.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, e.data)
+	e.data = e.data[n:]
+	if len(e.data) > 0 {
+		return n, nil
+	}
+	return n, fmt.Errorf("device error")
+}
+
+// Literal '<' is one byte on input but six in the canonical encoding: a
+// document under MaxWireBytes whose canonical encoding exceeds it is refused,
+// as Encode and the export would refuse it.
+func TestReadersRefuseATreeWhoseCanonicalEncodingIsOversized(t *testing.T) {
+	var doc bytes.Buffer
+	doc.WriteString(`{"version":"` + Version + `","sourceSHA":"` + strings.Repeat("a", 40) + `","files":[`)
+	data := base64.StdEncoding.EncodeToString(make([]byte, MaxFileBytes))
+	for i := 0; i < MaxContentBytes/MaxFileBytes; i++ {
+		fmt.Fprintf(&doc, `{"path":"big%d","mode":420,"data":"%s"},`, i, data)
+	}
+	for i := 0; i < 16000; i++ {
+		if i > 0 {
+			doc.WriteByte(',')
+		}
+		fmt.Fprintf(&doc, `{"path":"d%02d/%05d%s","mode":420,"data":""}`, i%50, i, strings.Repeat("<", 245))
+	}
+	doc.WriteString("]}")
+	raw := doc.Bytes()
+	if len(raw) > MaxWireBytes {
+		t.Fatalf("fixture %d bytes", len(raw))
+	}
+	if _, err := Inspect(raw); err == nil {
+		t.Fatal("Inspect accepted an oversized canonical encoding")
+	}
+	parent := t.TempDir()
+	if _, err := ImportFrom(parent, bytes.NewReader(raw), Digest(raw), strings.Repeat("a", 40)); err == nil {
+		t.Fatal("ImportFrom accepted an oversized canonical encoding")
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "repository")); !os.IsNotExist(err) {
+		t.Fatal("repository published")
 	}
 }

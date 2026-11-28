@@ -142,7 +142,10 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 	limits := map[byte]int{protocol.StreamStdOut: operation.outputLimit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
 	buffers := map[byte]*frames{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
 	closed := false
-	for frames := 0; frames < operation.frames; frames++ {
+	// operation.frames bounds messages that carry no bytes. Every other
+	// message spends at least one byte of a channel limit, so the byte limits
+	// already bound them, whatever chunk size the API server relays.
+	for empty := 0; empty < operation.frames; {
 		kind, reader, err := conn.NextReader()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
@@ -172,6 +175,9 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 		}
 		if err != nil || len(raw) > remaining {
 			return nil, 0, ErrTransport
+		}
+		if len(raw) == 0 {
+			empty++
 		}
 		buffer.add(raw)
 	}

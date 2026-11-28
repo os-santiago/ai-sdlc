@@ -234,6 +234,11 @@ func DecodeArchiveFrom(raw io.Reader, sourceSHA string) (workspacebundle.Bundle,
 	if !global || root == "" || b.Validate() != nil {
 		return b, ErrSource
 	}
+	// Every consumer encodes the tree; refuse one whose encoding exceeds the
+	// wire bound here, as a source refusal.
+	if _, err := workspacebundle.EncodedSize(b); err != nil {
+		return b, ErrSource
+	}
 	sort.Slice(b.Files, func(i, j int) bool { return b.Files[i].Path < b.Files[j].Path })
 	return b, nil
 }
