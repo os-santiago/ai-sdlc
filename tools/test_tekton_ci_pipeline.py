@@ -90,7 +90,8 @@ class ManifestTests(unittest.TestCase):
         kinds = sorted((d['kind'], d['metadata']['name']) for d in documents())
         self.assertEqual(kinds, sorted([
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
-            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
+            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'), ('ResourceQuota', 'ai-sdlc-ci-candidate-pods'), ('ResourceQuota', 'ai-sdlc-ci-fetch-pods'),
+            ('PriorityClass', 'ai-sdlc-ci-candidate'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelinerun-labels'),
             ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
@@ -99,7 +100,7 @@ class ManifestTests(unittest.TestCase):
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
             ('Task', 'npm-lock-update'), ('Task', 'dependency-audit')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
-            if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding'):
+            if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'PriorityClass'):
                 self.assertEqual(doc['metadata']['namespace'], 'ai-sdlc-ci', doc['metadata']['name'])
         for account in by_kind('ServiceAccount').values():
             self.assertIs(account['automountServiceAccountToken'], False, account['metadata']['name'])
@@ -116,7 +117,7 @@ class ManifestTests(unittest.TestCase):
         self.assertIn('s.metadata.labels', rules)
         self.assertIn('request.userInfo.groups', rules, 'cache writers are administrators')
         self.assertIn("['accessModes', 'resources']", rules, 'source claims allow no selector, class, data source or volume')
-        self.assertIn("['automountServiceAccountToken', 'securityContext', 'runtimeClassName']", rules, 'pod template allowlist')
+        self.assertIn("['automountServiceAccountToken', 'securityContext', 'runtimeClassName', 'priorityClassName']", rules, 'pod template allowlist')
         self.assertIn("['name', 'computeResources']", rules, 'step and sidecar overrides')
         self.assertIn('readOnly == true', rules)
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
@@ -129,6 +130,23 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual([v['expression'] for v in policy['validations']], ['variables.egress == variables.oldEgress'])
         binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelinerun-labels']['spec']
         self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-pipelinerun-labels', ['Deny']))
+
+    def test_candidate_and_fetch_pods_fit_beside_the_measured_node_baseline(self):
+        quotas = by_kind('ResourceQuota')
+        candidate, fetch = quotas['ai-sdlc-ci-candidate-pods']['spec'], quotas['ai-sdlc-ci-fetch-pods']['spec']
+        self.assertEqual(candidate['scopeSelector']['matchExpressions'],
+                         [{'scopeName': 'PriorityClass', 'operator': 'In', 'values': ['ai-sdlc-ci-candidate']}])
+        self.assertEqual(fetch['scopeSelector']['matchExpressions'],
+                         [{'scopeName': 'PriorityClass', 'operator': 'NotIn', 'values': ['ai-sdlc-ci-candidate']}])
+        priority = by_kind('PriorityClass')['ai-sdlc-ci-candidate']
+        self.assertEqual((priority['value'], priority['preemptionPolicy'], priority['globalDefault']), (0, 'Never', False))
+        pods = json.loads((tekton.ROOT / 'runtime/k8s/deploy/local/offline-runtime/kubelet-pods.json').read_text())['podPidsLimit']
+        node_limit, baseline_peak, fetch_peak = 2048, 1100, 150  # measured on the existing kind nodes and a Maven pod with tests
+        total = baseline_peak + int(candidate['hard']['pods']) * pods + int(fetch['hard']['pods']) * fetch_peak
+        self.assertLessEqual(total, node_limit, total)
+        self.assertIn('podPidsLimit: %d' % pods, (tekton.ROOT / 'runtime/k8s/deploy/local/kind.yaml').read_text())
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("s.podTemplate.priorityClassName == 'ai-sdlc-ci-candidate'", rules, 'build-test must use the candidate quota')
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
@@ -654,7 +672,7 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(template['serviceAccountName'], 'ai-sdlc-ci-runner')
         self.assertIs(template['podTemplate']['automountServiceAccountToken'], False)
         self.assertEqual(spec['taskRunSpecs'], [{'pipelineTaskName': 'build-test', 'podTemplate': dict(
-            template['podTemplate'], runtimeClassName='ai-sdlc-offline')}])
+            template['podTemplate'], runtimeClassName='ai-sdlc-offline', priorityClassName='ai-sdlc-ci-candidate')}])
         for name, task in runner.SANDBOXED_TASKS.items():
             self.assertIn(task, {t['name'] for t in by_kind('Pipeline')[name]['spec']['tasks']})
         self.assertNotIn('taskRunSpecs', runner.maven_build_test('a/b', SHA, '.', ['none'], [])['spec'], 'sandbox is opt-in')
@@ -773,6 +791,26 @@ class RunToolTests(unittest.TestCase):
         upper = runner.maven_build_test('OS-Santiago/Quarkus-Super-Heroes', SHA, 'm', ['none'], [])
         self.assertEqual(upper['spec']['workspaces'][1]['persistentVolumeClaim']['claimName'],
                          tekton.cache_claim('os-santiago/quarkus-super-heroes'))
+
+    def test_sandboxed_runs_require_the_raised_task_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory, 'ai-sdlc/c')
+            state.mkdir(parents=True)
+            state.joinpath('ownership.json').write_text('{"provider": "podman"}')
+            with patch.dict('os.environ', {'XDG_STATE_HOME': directory}):
+                for shown, ok in (('1024', True), ('infinity', True), ('629145', True), ('307', False), ('', False)):
+                    run = Mock(return_value=Mock(stdout=shown + '\n'))
+                    if ok:
+                        runner.sandbox_ready('c', 1024, run=run)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 're-run ./install.sh sandbox'):
+                            runner.sandbox_ready('c', 1024, run=run)
+                self.assertEqual(run.call_args.args[0][:3], ['podman', 'exec', 'c-control-plane'])
+
+    def test_admission_requires_the_sandbox_for_build_test(self):
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("s.pipelineTaskName == 'build-test'", rules)
+        self.assertIn("s.podTemplate.runtimeClassName == 'ai-sdlc-offline'", rules)
 
     def test_a_run_passes_only_with_success_the_requested_commit_and_exit_code_zero(self):
         ok = {'succeeded': True, 'commit': SHA, 'summary': {'mavenExitCode': 0}}

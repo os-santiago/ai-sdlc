@@ -35,14 +35,15 @@ MIRROR = re.compile(r'https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-
 MAVEN_ARG = re.compile(r'-[A-Za-z][A-Za-z0-9_.:=,!*/@+-]{0,199}')
 # npm update takes package names only and stays within package.json ranges.
 NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}')
-# The pipeline task that runs untrusted candidate code offline can get the
-# sandbox runtime class (--sandbox). The installed ai-sdlc-offline class
-# configures gVisor with network=none, so fetch tasks (trusted base inputs, or
-# npm with scripts disabled) always use the default runtime. Opt-in for now:
-# with the pinned runsc build, Tekton task pods failed to start their
-# sub-containers ("creating root file system: input/output error") although a
-# plain four-container pod started; see docs/operations/tekton-ci.md.
+# The pipeline task that runs untrusted candidate code offline runs under the
+# sandbox runtime class (gVisor, installed by ./install.sh sandbox, which also
+# raises the node's per-scope task limit that gVisor pods need; admission
+# refuses a build-test run without it). The class has
+# network=none, so fetch tasks (trusted base inputs, or npm with scripts
+# disabled) always use the default runtime.
 SANDBOXED_TASKS = {'ai-sdlc-maven-build-test': 'build-test'}
+# Candidate-code pods carry this class; a ResourceQuota allows one at a time.
+CANDIDATE_PRIORITY = 'ai-sdlc-ci-candidate'
 POD_SECURITY = {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532, 'fsGroup': 65532,
                 'seccompProfile': {'type': 'RuntimeDefault'}}
 
@@ -144,7 +145,8 @@ def pipeline_run(pipeline, repository, revision, params, workspaces, target, run
         if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?', runtime_class):
             raise ValueError('Invalid runtime class name')
         spec['taskRunSpecs'] = [{'pipelineTaskName': SANDBOXED_TASKS[pipeline],
-                                 'podTemplate': dict(pod, runtimeClassName=runtime_class)}]
+                                 'podTemplate': dict(pod, runtimeClassName=runtime_class,
+                                                     priorityClassName=CANDIDATE_PRIORITY)}]
     return {'apiVersion': 'tekton.dev/v1', 'kind': 'PipelineRun',
             'metadata': {'generateName': pipeline.removeprefix('ai-sdlc-') + '-', 'namespace': tekton_ci_install.CI_NAMESPACE,
                          'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/pipeline': pipeline,
@@ -289,6 +291,23 @@ def connect(cluster):
     return kubectl
 
 
+def sandbox_ready(cluster, minimum, run=run):
+    """Evidence that ./install.sh sandbox raised the node's per-scope task limit.
+
+    A RuntimeClass from an earlier install leaves scopes at 307 tasks, where
+    sandboxed Tekton pods die; the node's systemd default must be at least the
+    reviewed value (or unlimited).
+    """
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / cluster
+    provider = json.loads((state / 'ownership.json').read_text()).get('provider')
+    if provider not in ('docker', 'podman'):
+        raise ValueError('Unknown kind provider in the ownership record')
+    shown = run([provider, 'exec', cluster + '-control-plane', 'systemctl', 'show', '-p', 'DefaultTasksMax', '--value'],
+                capture_output=True, timeout=60).stdout.strip()
+    if shown != 'infinity' and (not shown.isdigit() or int(shown) < minimum):
+        raise ValueError('The kind node still caps container scopes at ' + shown + ' tasks; re-run ./install.sh sandbox')
+
+
 def require_runtime_class(kubectl, name):
     if run(kubectl + ['get', 'runtimeclass', name, '-o', 'name'], capture_output=True, check=False).returncode != 0:
         raise ValueError('RuntimeClass ' + name + ' is absent; install it with ./install.sh sandbox')
@@ -311,7 +330,7 @@ def render_from_args(args, project):
         raise ValueError('Name --repository or a --project catalog')
     if project and repository != project['repository']:
         raise ValueError('Repository differs from the project catalog')
-    runtime_class = args.runtime_class if args.sandbox else None
+    runtime_class = args.runtime_class
     if args.pipeline == 'npm-lock-update':
         if project and args.directory not in project.get('npmDirectories', []):
             raise ValueError('npm directory is not in the project catalog')
@@ -348,8 +367,7 @@ def main(argv=None):
     parser.add_argument('--package', action='append', help='npm-lock-update update mode: a package name (npm update takes no versions)')
     parser.add_argument('--registry-url', default='', help='npm-lock-update: registry or proxy URL')
     parser.add_argument('--allow-unverified', action='store_true', help='Run a catalog module whose status is unverified')
-    parser.add_argument('--sandbox', action='store_true', help='maven-build-test: run build-test under --runtime-class (gVisor)')
-    parser.add_argument('--runtime-class', default=SANDBOX, help='RuntimeClass for --sandbox (default ai-sdlc-offline)')
+    parser.add_argument('--runtime-class', default=SANDBOX, help='maven-build-test: sandbox RuntimeClass (default ai-sdlc-offline)')
     parser.add_argument('--wait', type=int, default=0, metavar='SECONDS', help='Wait up to SECONDS for completion (0: do not wait)')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', args.cluster) or not 0 <= args.wait <= 7200:
@@ -373,6 +391,8 @@ def main(argv=None):
     kubectl = connect(args.cluster)
     if 'taskRunSpecs' in rendered['spec']:
         require_runtime_class(kubectl, args.runtime_class)
+        conf = (ROOT / 'runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf').read_text()
+        sandbox_ready(args.cluster, int(next(l.split('=', 1)[1] for l in conf.splitlines() if l.startswith('DefaultTasksMax='))))
     result = run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered), capture_output=True, check=False)
     if result.returncode != 0:
         # The rendered run carries no credential; show the API's reason (for

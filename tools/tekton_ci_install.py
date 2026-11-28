@@ -24,7 +24,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 DESIRED = ROOT / 'runtime/k8s/deploy/tekton-ci'
 CI_DIR = DESIRED / 'ci'
-CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml',
+CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml', 'resourcequota.yaml',
             'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
             'task-npm-lock-update.yaml', 'task-dependency-audit.yaml', 'pipeline-maven-build-test.yaml',
             'pipeline-maven-dependencies.yaml', 'pipeline-npm-lock-update.yaml', 'pipeline-dependency-audit.yaml')
@@ -229,7 +229,7 @@ def desired_tekton(items, lock, config, cluster_uid):
 def desired_ci(items, cluster_uid):
     for item in items:
         kind, namespace, name = key(item)
-        cluster_scoped = kind in ('ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding')
+        cluster_scoped = kind in ('ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'PriorityClass')
         if cluster_scoped and (namespace or not name.startswith(CI_CLUSTER_PREFIX)):
             raise ValueError('Cluster-scoped Tekton CI objects must be named ' + CI_CLUSTER_PREFIX + '*')
         if not cluster_scoped and ((kind == 'Namespace' and name != CI_NAMESPACE) or (kind != 'Namespace' and namespace != CI_NAMESPACE)):
@@ -286,6 +286,35 @@ def wait_admission(run, kubectl, items, sleep=time.sleep):
         detail = lines[-1][:300] if lines else ''
         sleep(4)
     raise ValueError('Tekton admission did not accept the reviewed CI definitions' + (': ' + detail if detail else ''))
+
+
+def release_stale_assistants(run, kubectl):
+    """Delete affinity-assistant StatefulSets left by finished runs.
+
+    The catalog runs with coschedule: disabled. Assistants that an earlier
+    configuration started are not removed by Tekton once the mode changes,
+    and each holds one of the CI namespace's two pods, which leaves task pods
+    pending. Only assistants whose owning PipelineRun is gone or finished are
+    deleted, so a run still using its assistant keeps it.
+    """
+    listed = run(kubectl + ['get', 'statefulset', '-n', CI_NAMESPACE, '-l', 'app.kubernetes.io/component=affinity-assistant',
+                            '-o', 'json'], capture_output=True)
+    released = []
+    for item in json.loads(listed.stdout or '{"items": []}').get('items', []):
+        owners = [o for o in item['metadata'].get('ownerReferences', []) if o.get('kind') == 'PipelineRun']
+        finished = True
+        for owner in owners:
+            found = run(kubectl + ['get', 'pipelinerun.tekton.dev', owner['name'], '-n', CI_NAMESPACE, '--ignore-not-found',
+                                   '-o', 'json'], capture_output=True)
+            if found.stdout.strip():
+                conditions = json.loads(found.stdout).get('status', {}).get('conditions', [])
+                state = next((c.get('status') for c in conditions if c.get('type') == 'Succeeded'), 'Unknown')
+                finished = finished and state in ('True', 'False')
+        if owners and finished:
+            run(kubectl + ['delete', 'statefulset', item['metadata']['name'], '-n', CI_NAMESPACE, '--wait=false'],
+                stdout=subprocess.DEVNULL)
+            released.append(item['metadata']['name'])
+    return released
 
 
 def observe(run, kubectl, lock=None):
@@ -348,11 +377,16 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     namespaced = [i for i in ci if i['kind'] != 'Namespace']
     attempts = wait_admission(run, kubectl, namespaced)
     apply(run, kubectl, namespaced)
+    # The single two-pod quota of an earlier revision is replaced by the
+    # candidate and fetch quotas; it would otherwise keep capping both.
+    run(kubectl + ['delete', 'resourcequota', 'ai-sdlc-ci-pods', '-n', CI_NAMESPACE, '--ignore-not-found'],
+        stdout=subprocess.DEVNULL)
+    released = release_stale_assistants(run, kubectl)
     observation = observe(run, kubectl, lock)
     if not observation['ready']:
         raise ValueError('Tekton CI is not ready after installation; owned state is retained for reapplication')
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
-                admissionAttempts=attempts, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
+                admissionAttempts=attempts, releasedAssistants=released, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 
 def validate_options(args):
