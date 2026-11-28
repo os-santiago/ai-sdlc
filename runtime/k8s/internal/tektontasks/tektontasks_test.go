@@ -91,6 +91,9 @@ func TestToolRequestsRenderInstalledPipelinesWithManifestInputs(t *testing.T) {
 		if pod["automountServiceAccountToken"] != false {
 			t.Fatal("API token mounted")
 		}
+		if _, claimed := pod["priorityClassName"]; claimed {
+			t.Fatal("every task would claim the single candidate slot")
+		}
 	}
 	object, _ := build.PipelineRun("ai-sdlc-offline")
 	spec := object["spec"].(map[string]any)
@@ -99,7 +102,8 @@ func TestToolRequestsRenderInstalledPipelinesWithManifestInputs(t *testing.T) {
 		t.Fatal("build-test can write the shared cache")
 	}
 	sandbox := spec["taskRunSpecs"].([]any)[0].(map[string]any)
-	if sandbox["pipelineTaskName"] != "build-test" || sandbox["podTemplate"].(map[string]any)["runtimeClassName"] != "ai-sdlc-offline" {
+	if template := sandbox["podTemplate"].(map[string]any); sandbox["pipelineTaskName"] != "build-test" || template["runtimeClassName"] != "ai-sdlc-offline" ||
+		template["priorityClassName"] != "ai-sdlc-ci-candidate" {
 		t.Fatal("sandbox not applied to build-test", sandbox)
 	}
 	npmObject, _ := npm.PipelineRun("ai-sdlc-offline")
