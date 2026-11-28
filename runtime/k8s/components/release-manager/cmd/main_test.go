@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 )
@@ -78,6 +80,9 @@ func TestMergeStateLineNamesTheBlockers(t *testing.T) {
 		if got := mergeStateLine(c.state, c.wait); got != c.want {
 			t.Errorf("mergeStateLine(%q) = %q, want %q", c.state, got, c.want)
 		}
+	}
+	if strings.Join(metrics.MergeWaitReasons, ",") != strings.Join(mergegate.Reasons, ",") {
+		t.Fatal("metric reasons differ from the gate's", metrics.MergeWaitReasons)
 	}
 	sampleMergeWait(threads, nil)
 	if v, _ := metrics.Default.Sample("ai_sdlc_merge_waiting", "review-threads-unresolved"); v != 1 {
