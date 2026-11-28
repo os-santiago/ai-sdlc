@@ -22,6 +22,9 @@ Start here:
   autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
   opt-in scheduled backup, checking a backup, and restoring it.
+- [Tekton CI](operations/tekton-ci.md): opt-in, pinned Tekton Pipelines and a
+  reviewed Maven pipeline (`--tekton-ci`), with the design for reporting its
+  result as a required check.
 - [Vulnerability intake](architecture/vulnerability-intake.md): reports from
   any scanner become de-duplicated, AI-SDLC-ready issues through Tekton tasks
   and a validated triage stage.

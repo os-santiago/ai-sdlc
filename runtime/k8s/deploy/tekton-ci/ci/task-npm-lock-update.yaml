@@ -1,0 +1,231 @@
+# Deterministically update an npm lockfile without running package code or
+# reading project npm configuration:
+# `npm update <packages> --package-lock-only --ignore-scripts` or
+# `npm audit fix --package-lock-only --ignore-scripts`. No install scripts
+# run and no node_modules is written. The task publishes a bounded summary of
+# the changed lockfile entries, the registry hosts the lockfile resolves from
+# (and any new ones) and the SHA-256 of the unified diff, and writes the full
+# diff and the updated lockfile under npm-lock-update/ in the source
+# workspace. npm runs on copies of package.json and package-lock.json in a
+# scratch directory, so a project .npmrc is never read; user and global npm
+# configuration point at an empty file, git is disabled, and the registry is
+# always set explicitly.
+#
+# Egress: the ai-sdlc.io/ci-egress: fetch label allows DNS and public HTTPS
+# (the npm registry). With an npm proxy, pass registry-url and narrow the
+# policy to the proxy.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: npm-lock-update
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    # Tekton copies Task labels to pods; network-policy.yaml selects on it.
+    ai-sdlc.io/ci-egress: fetch
+spec:
+  description: Update an npm lockfile with scripts disabled and publish the bounded change.
+  params:
+    - name: directory
+      type: string
+      description: Directory holding package.json and package-lock.json, relative to the repository root.
+    - name: mode
+      type: string
+      default: update
+      description: update (named packages) or audit-fix.
+    - name: packages
+      type: array
+      default: []
+      description: Package names for update mode, such as vite; npm update takes no versions and stays within package.json ranges.
+    - name: registry-url
+      type: string
+      default: ""
+      description: Optional npm registry or proxy URL; empty uses the public registry.
+  workspaces:
+    - name: source
+      description: Contains the checkout under source/; receives npm-lock-update/.
+  results:
+    - name: summary
+      description: JSON with the npm exit code, changed lockfile entries (bounded) and the diff digest.
+  volumes:
+    - name: home
+      emptyDir:
+        sizeLimit: 2Gi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 512Mi
+  stepTemplate:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+      - name: home
+        mountPath: /home/ci
+      - name: tmp
+        mountPath: /tmp
+  steps:
+    # Same rule as the Maven tasks, in Node (the image has no curl): wait for
+    # three consecutive connect timeouts or refusals to the Kubernetes API
+    # Service before npm runs, because a new pod can start unrestricted.
+    - name: egress-gate
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      script: |
+        #!/usr/local/bin/node
+        const net = require("net");
+        const host = process.env.KUBERNETES_SERVICE_HOST, port = Number(process.env.KUBERNETES_SERVICE_PORT);
+        if (!host || !port) { console.error("no Kubernetes Service address to probe"); process.exit(1); }
+        const probe = () => new Promise(done => {
+          const socket = net.connect({host, port, timeout: 2000});
+          socket.on("connect", () => { socket.destroy(); done("connected"); });
+          socket.on("timeout", () => { socket.destroy(); done("denied"); });
+          socket.on("error", e => done(e.code === "ECONNREFUSED" ? "denied" : "error"));
+        });
+        (async () => {
+          let denied = 0;
+          for (let attempt = 1; attempt <= 90; attempt++) {
+            denied = (await probe()) === "denied" ? denied + 1 : 0;
+            if (denied >= 3) { console.log("Network policy enforced after " + attempt + " probes"); return; }
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          console.error("network policy is not enforced: the Kubernetes API stays reachable");
+          process.exit(1);
+        })();
+    - name: update
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      env:
+        - name: HOME
+          value: /home/ci
+        - name: DIRECTORY
+          value: $(params.directory)
+        - name: MODE
+          value: $(params.mode)
+        - name: REGISTRY_URL
+          value: $(params.registry-url)
+        - name: SOURCE
+          value: $(workspaces.source.path)/source
+        - name: OUTPUT
+          value: $(workspaces.source.path)/npm-lock-update
+        - name: RESULT
+          value: $(results.summary.path)
+        - name: NPM_CONFIG_CACHE
+          value: /home/ci/.npm
+        - name: NPM_CONFIG_USERCONFIG
+          value: /tmp/empty-user-npmrc
+        - name: NPM_CONFIG_GLOBALCONFIG
+          value: /tmp/empty-global-npmrc
+        - name: NPM_CONFIG_GIT
+          value: "false"
+        - name: NPM_CONFIG_UPDATE_NOTIFIER
+          value: "false"
+        - name: NPM_CONFIG_FUND
+          value: "false"
+        - name: NPM_CONFIG_IGNORE_SCRIPTS
+          value: "true"
+      args: ["$(params.packages[*])"]
+      script: |
+        #!/bin/sh
+        set -eu
+        # Whole-value match: grep -x matches lines, so refuse a newline first.
+        matches() { case "$1" in *"
+        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
+        matches "$DIRECTORY" '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
+          || { echo 'directory must be a relative path' >&2; exit 2; }
+        case "/$DIRECTORY/" in */./*|*/../*) echo 'directory must be a relative path' >&2; exit 2;; esac
+        case "$MODE" in update|audit-fix) ;; *) echo 'mode must be update or audit-fix' >&2; exit 2;; esac
+        [ "$#" -le 16 ] || { echo 'at most 16 packages' >&2; exit 2; }
+        for spec in "$@"; do
+          matches "$spec" '(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}' \
+            || { echo "invalid package name (npm update takes names, not versions): $spec" >&2; exit 2; }
+        done
+        if [ "$MODE" = update ] && [ "$#" -eq 0 ]; then echo 'update mode needs packages' >&2; exit 2; fi
+        if [ "$MODE" = audit-fix ] && [ "$#" -gt 0 ]; then echo 'audit-fix takes no packages' >&2; exit 2; fi
+        registry="${REGISTRY_URL:-https://registry.npmjs.org/}"
+        matches "$registry" 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
+          || { echo 'invalid registry URL' >&2; exit 2; }
+        # Only this configuration applies: empty user and global files (npm
+        # refuses one file for both), git disabled, scripts disabled and an
+        # explicit registry.
+        : > /tmp/empty-user-npmrc
+        : > /tmp/empty-global-npmrc
+        export NPM_CONFIG_REGISTRY="$registry" NPM_CONFIG_USERCONFIG=/tmp/empty-user-npmrc \
+          NPM_CONFIG_GLOBALCONFIG=/tmp/empty-global-npmrc NPM_CONFIG_GIT=false NPM_CONFIG_IGNORE_SCRIPTS=true
+        project="$SOURCE/$DIRECTORY"
+        [ -f "$project/package.json" ] && [ -f "$project/package-lock.json" ] \
+          || { echo 'package.json and package-lock.json are required' >&2; exit 2; }
+        # Work on copies: the project's .npmrc and any other file stay unread.
+        work=/tmp/work
+        rm -rf "$work"; mkdir -p "$work" "$OUTPUT"
+        cp "$project/package.json" "$project/package-lock.json" "$work/"
+        cp "$work/package-lock.json" /tmp/before.json
+        cd "$work"
+        code=0
+        if [ "$MODE" = update ]; then
+          npm update "$@" --package-lock-only --ignore-scripts --no-audit || code=$?
+        else
+          npm audit fix --package-lock-only --ignore-scripts || code=$?
+        fi
+        # diff exits 1 when the files differ; anything above is an I/O error,
+        # and no summary is published for a partial diff.
+        rc=0
+        diff -u /tmp/before.json package-lock.json > "$OUTPUT/package-lock.diff" || rc=$?
+        [ "$rc" -le 1 ] || { echo "diff failed with $rc" >&2; exit 1; }
+        cp package-lock.json "$OUTPUT/package-lock.json"
+        NPM_EXIT_CODE="$code" node -e '
+          const fs = require("fs"), crypto = require("crypto");
+          const [before, after, diffPath] = process.argv.slice(1);
+          const entries = f => JSON.parse(fs.readFileSync(f, "utf8")).packages || {};
+          // Every published string is printable ASCII and length-bounded.
+          const clip = (v, n) => v == null ? null : String(v).replace(/[^ -~]/g, "").slice(0, n);
+          const a = entries(before), b = entries(after), changes = [];
+          for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+            if (key === "") continue;
+            // Compare full values; bound only what is published.
+            const x = a[key] || {}, y = b[key] || {}, from = x.version || null, to = y.version || null;
+            // A changed resolved URL or integrity is a change even at the same version.
+            const resolution = from === to && (x.resolved !== y.resolved || x.integrity !== y.integrity);
+            if (from !== to || resolution) changes.push(Object.assign({path: clip(key.replace(/^node_modules\//, ""), 120),
+              from: clip(from, 64), to: clip(to, 64)}, resolution ? {resolutionChanged: true} : {}));
+          }
+          const hosts = e => new Set(Object.values(e).map(p => { try { return new URL(p.resolved).host; } catch { return null; } }).filter(Boolean));
+          const old = hosts(a), now = [...hosts(b)].sort();
+          const fresh = now.filter(h => !old.has(h));
+          const diff = fs.readFileSync(diffPath);
+          const out = {directory: clip(process.env.DIRECTORY, 200), mode: process.env.MODE, npmExitCode: Number(process.env.NPM_EXIT_CODE),
+            changed: changes.length, changes: changes.slice(0, 25), truncated: changes.length > 25,
+            resolvedHosts: now.slice(0, 10).map(h => clip(h, 64)), newResolvedHosts: fresh.slice(0, 10).map(h => clip(h, 64)),
+            diffBytes: diff.length, diffSHA256: crypto.createHash("sha256").update(diff).digest("hex")};
+          // Tekton stores the result in the termination message encoded by Go
+          // json.Marshal (quotes and backslashes take 2 bytes, <, > and & take 6),
+          // and the kubelet keeps 3072 bytes for each of the four containers in
+          // this pod, including about 150 bytes of envelope.
+          const encoded = v => { const t = JSON.stringify(JSON.stringify(v)); return Buffer.byteLength(t) + 5 * (t.match(/[<>&]/g) || []).length; };
+          for (const list of ["changes", "newResolvedHosts", "resolvedHosts"]) {
+            while (encoded(out) > 2800 && out[list].length) { out[list].pop(); out.truncated = true; }
+          }
+          fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
+        ' /tmp/before.json package-lock.json "$OUTPUT/package-lock.diff"
+        cat "$RESULT"; echo
+        # The verdict travels in npmExitCode (Tekton publishes no results from
+        # a failed task).
+        [ "$code" -eq 0 ] || echo "npm exited with $code" >&2

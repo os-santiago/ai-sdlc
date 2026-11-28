@@ -1,0 +1,13 @@
+# Namespace for CI PipelineRuns. Restricted Pod Security is enforced: steps,
+# sidecars and Tekton's injected helpers must run non-root, without privilege
+# escalation, with all capabilities dropped and the RuntimeDefault seccomp profile.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
