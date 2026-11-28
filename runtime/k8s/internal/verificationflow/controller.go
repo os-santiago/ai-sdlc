@@ -292,6 +292,14 @@ func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		if e != nil {
 			return proof, ControllerError{stage}
 		}
+		// A manifest with dependencies reads the sealed cache of the base
+		// tree's dependency files. Candidates cannot change those files
+		// (they are harness), so every run reads the same cache.
+		cache, e := dependencyCache(ctx, client, v, trees.Baseline)
+		if e != nil {
+			stage = e.Error()
+			return proof, ControllerError{stage}
+		}
 		testRuns = map[string]*podtransport.TestsRun{}
 		for _, run := range repositorytests.RunNames() {
 			bundle, _ := trees.Tree(run)
@@ -301,7 +309,7 @@ func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 				return proof, ControllerError{stage}
 			}
 			p := repositorytests.Pod{Namespace: podtransport.VerifierNamespace, MailboxImage: mailboxImage, RuntimeClass: runtimeClass, VerificationID: c.ID(), WorkItemID: c.WorkItemID,
-				Run: run, SourceSHA: c.SourceSHA, TreeSHA256: tree, Verification: v}
+				Run: run, SourceSHA: c.SourceSHA, TreeSHA256: tree, Verification: v, DependencyCache: cache}
 			planned, e := podtransport.PlanTestsRun(client, p, admission, raw, time.UnixMilli(c.ExpiresAt))
 			if e != nil {
 				return proof, ControllerError{stage}

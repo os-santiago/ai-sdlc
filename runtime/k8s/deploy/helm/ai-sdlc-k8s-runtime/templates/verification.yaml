@@ -53,6 +53,14 @@ rules:
     resources: [pods/exec]
     verbs: [get, create]
   {{- end }}
+  {{- if include "ai-sdlc-k8s-runtime.dependencyCache" . }}
+  # verification.dependencies: read the sealed cache claim before any pod is
+  # created. The operator fills and seals it; the controller
+  # never writes or deletes one.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  {{- end }}
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [list]

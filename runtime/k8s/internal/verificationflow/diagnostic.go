@@ -113,7 +113,8 @@ func testsStage(stage string, err error) string {
 
 func knownStage(stage string) bool {
 	switch stage {
-	case "source-rate-limited", "source-credential-rejected", "source-credential-invalid", "sandbox-runtime-class", "runs-deadline", "runs-renew", "runs-context":
+	case "source-rate-limited", "source-credential-rejected", "source-credential-invalid", "sandbox-runtime-class", "runs-deadline", "runs-renew", "runs-context",
+		string(stopDependencyKey), string(stopDependencyUnavailable):
 		return true
 	}
 	if base, step, ok := strings.Cut(stage, "-"); ok {

@@ -221,3 +221,100 @@ func TestPodsWithAnalysisAnalyzeBaselineAndCandidateOnly(t *testing.T) {
 		}
 	}
 }
+
+func dependencyPod(run string) Pod {
+	p := testPod()
+	p.Run = run
+	p.Verification.Dependencies = &project.Dependencies{CachePath: "/deps", KeyGlobs: []string{"**/pom.xml"}}
+	p.DependencyCache = project.DependencyClaimName(strings.Repeat("f", 64))
+	return p
+}
+
+func TestPodsWithDependenciesMountTheSealedCacheReadOnly(t *testing.T) {
+	for _, run := range RunNames() {
+		w, err := CompilePod(dependencyPod(run))
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings := w.ConfigMap["data"].(map[string]any)["verification.json"].(string)
+		if !strings.Contains(settings, `"dependencies":{"cachePath":"/deps","keyGlobs":["**/pom.xml"]}`) {
+			t.Fatal("settings", settings)
+		}
+		spec := w.Pod["spec"].(map[string]any)
+		var claims []any
+		for _, v := range spec["volumes"].([]any) {
+			if pvc, ok := v.(map[string]any)["persistentVolumeClaim"]; ok {
+				claims = append(claims, v)
+				if v.(map[string]any)["name"] != DependencyVolume || pvc.(map[string]any)["claimName"] != "deps-"+strings.Repeat("f", 64) || pvc.(map[string]any)["readOnly"] != true {
+					t.Fatal(run, "the cache claim must be attached read-only", v)
+				}
+			}
+		}
+		if len(claims) != 1 {
+			t.Fatal(run, "exactly one claim", claims)
+		}
+		var mounted []any
+		for _, c := range append(spec["containers"].([]any), spec["initContainers"].([]any)...) {
+			for _, m := range c.(map[string]any)["volumeMounts"].([]any) {
+				if m.(map[string]any)["name"] == DependencyVolume {
+					mounted = append(mounted, m)
+					if c.(map[string]any)["name"] != "tests" || m.(map[string]any)["mountPath"] != "/deps" || m.(map[string]any)["readOnly"] != true {
+						t.Fatal(run, "only the tests container mounts the cache, read-only", c.(map[string]any)["name"], m)
+					}
+				}
+			}
+		}
+		if len(mounted) != 1 {
+			t.Fatal(run, "the cache is mounted once", mounted)
+		}
+		// The network stays closed: the runtime class, no service links and
+		// no host network are unchanged by the cache.
+		if spec["runtimeClassName"] != "ai-sdlc-offline" || spec["hostNetwork"] != false || spec["enableServiceLinks"] != false {
+			t.Fatal(run, "the cache changed the sandbox", spec)
+		}
+	}
+}
+
+func TestDependencyCacheMustMatchTheManifest(t *testing.T) {
+	without := testPod()
+	without.DependencyCache = project.DependencyClaimName(strings.Repeat("f", 64))
+	missing := dependencyPod(RunBaseline)
+	missing.DependencyCache = ""
+	malformed := dependencyPod(RunBaseline)
+	malformed.DependencyCache = "deps-other"
+	foreign := dependencyPod(RunBaseline)
+	foreign.DependencyCache = "data"
+	for name, p := range map[string]Pod{"no manifest section": without, "no claim": missing, "malformed claim": malformed, "foreign claim": foreign} {
+		if _, err := CompilePod(p); err == nil {
+			t.Fatal("accepted", name)
+		}
+	}
+}
+
+// A manifest with both backing services and a dependency cache renders both:
+// the cache only in the tests container, the services as sidecars.
+func TestDependenciesComposeWithServices(t *testing.T) {
+	p := dependencyPod(RunCandidate)
+	p.Verification.Services = []project.Service{postgres()}
+	w, err := CompilePod(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := w.Pod["spec"].(map[string]any)
+	claims := 0
+	for _, v := range spec["volumes"].([]any) {
+		if _, ok := v.(map[string]any)["persistentVolumeClaim"]; ok {
+			claims++
+		}
+	}
+	if claims != 1 || len(spec["initContainers"].([]any)) != 3 {
+		t.Fatal("cache and service not both rendered", spec["volumes"], len(spec["initContainers"].([]any)))
+	}
+	for _, c := range spec["initContainers"].([]any) {
+		for _, m := range c.(map[string]any)["volumeMounts"].([]any) {
+			if m.(map[string]any)["name"] == DependencyVolume {
+				t.Fatal("a sidecar mounts the dependency cache", c.(map[string]any)["name"])
+			}
+		}
+	}
+}
