@@ -18,17 +18,17 @@ func TestRotationOrdersLeastRecentlyObservedFirst(t *testing.T) {
 	if got := (*Rotation)(nil).snapshot(); len(got.Recent) != 0 || len(got.Parked) != 0 {
 		t.Fatal("nil rotation", got)
 	}
-	r.observed(pub("a"), 0)
+	r.observed(pub("a"), 0, false, nil)
 	now = now.Add(time.Minute)
-	r.observed(pub("b"), 0)
+	r.observed(pub("b"), 0, false, nil)
 	now = now.Add(time.Minute)
-	r.observed(pub("c"), ParkClosed)
+	r.observed(pub("c"), ParkClosed, true, nil)
 	got := r.snapshot()
 	if strings.Join(got.Recent, ",") != pub("a")+","+pub("b") || strings.Join(got.Parked, ",") != pub("c") {
 		t.Fatal("order", got)
 	}
 	now = now.Add(time.Minute)
-	r.observed(pub("a"), 0)
+	r.observed(pub("a"), 0, false, nil)
 	if got = r.snapshot(); strings.Join(got.Recent, ",") != pub("b")+","+pub("a") {
 		t.Fatal("observed publication not moved to the back", got)
 	}
@@ -51,7 +51,7 @@ func TestRotationIsBounded(t *testing.T) {
 	for i := 0; i < store.MaxMergeRotation+40; i++ {
 		now = now.Add(time.Second)
 		id := "publication-" + strings.Repeat("0", 60) + string(hex[i/256%16]) + string(hex[i/16%16]) + string(hex[i%16]) + "0"
-		r.observed(id, 0)
+		r.observed(id, 0, false, nil)
 	}
 	got := r.snapshot()
 	if len(r.entries) != store.MaxMergeRotation || len(got.Recent) != store.MaxMergeRotation {
@@ -64,10 +64,42 @@ func TestRotationIsBounded(t *testing.T) {
 	// A table full of parked entries leaves a new one untracked.
 	p := &Rotation{now: func() time.Time { return now }}
 	for i := 0; i < store.MaxMergeRotation; i++ {
-		p.observed("publication-"+strings.Repeat("1", 60)+string(hex[i/256%16])+string(hex[i/16%16])+string(hex[i%16])+"0", ParkClosed)
+		p.observed("publication-"+strings.Repeat("1", 60)+string(hex[i/256%16])+string(hex[i/16%16])+string(hex[i%16])+"0", ParkClosed, true, nil)
 	}
-	p.observed(pub("e"), 0)
+	p.observed(pub("e"), 0, false, nil)
 	if _, tracked := p.entries[pub("e")]; tracked || len(p.entries) != store.MaxMergeRotation {
 		t.Fatal("parked entries evicted")
+	}
+}
+
+// Wait counts follow each publication's latest gate observation: a poll that
+// could not observe the gate keeps the last wait, a ready or closed gate
+// clears it, and an old wait stops counting.
+func TestRotationSummarizesLatestWaits(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	r := &Rotation{now: func() time.Time { return now }}
+	threads := &Wait{State: "merge-waiting-for-review-threads", Reasons: []string{"review-threads-unresolved", "native-merge-not-ready"}, UnresolvedThreads: 2}
+	checks := &Wait{State: "merge-waiting-for-checks", Reasons: []string{"checks-not-passed", "review-threads-unresolved"}, UnresolvedThreads: 1}
+	r.observed(pub("a"), 0, true, threads)
+	r.observed(pub("b"), 0, true, checks)
+	threads.Reasons[0] = "mutated"
+	got := r.Waits()
+	if got.Reasons["review-threads-unresolved"] != 2 || got.Reasons["checks-not-passed"] != 1 || got.Reasons["native-merge-not-ready"] != 1 || got.UnresolvedThreads != 3 {
+		t.Fatal("summary", got)
+	}
+	r.observed(pub("a"), 0, false, nil) // gate unavailable: wait kept
+	if r.Waits().UnresolvedThreads != 3 {
+		t.Fatal("unobserved gate cleared a wait")
+	}
+	r.observed(pub("b"), 0, true, nil) // ready or closed: cleared
+	if got = r.Waits(); got.Reasons["checks-not-passed"] != 0 || got.UnresolvedThreads != 2 {
+		t.Fatal("observed gate kept a wait", got)
+	}
+	now = now.Add(WaitMemory + time.Second)
+	if got = r.Waits(); len(got.Reasons) != 0 || got.UnresolvedThreads != 0 {
+		t.Fatal("old wait counted", got)
+	}
+	if got = (*Rotation)(nil).Waits(); len(got.Reasons) != 0 {
+		t.Fatal("nil rotation", got)
 	}
 }

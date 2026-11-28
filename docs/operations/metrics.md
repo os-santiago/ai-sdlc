@@ -50,8 +50,8 @@ credentials or error text.
 | `ai_sdlc_publication_reconciliations_total` | counter | `effect`, `outcome` | Each read-only reconciliation of an uncertain publication effect |
 | `ai_sdlc_merge_reconciliations_total` | counter | `outcome` | Each read-only reconciliation of an uncertain merge effect |
 | `ai_sdlc_merge_attempts_exhausted_total` | counter | none | Publications whose last allowed merge attempt stopped before any send (at most once each; see below) |
-| `ai_sdlc_merge_waiting` | gauge | `reason` | 1 for each gate blocker of the published pull request the last merge poll found waiting, 0 for the others |
-| `ai_sdlc_merge_unresolved_review_threads` | gauge | none | Unresolved review threads on that pull request (0 when none) |
+| `ai_sdlc_merge_waiting` | gauge | `reason` | Published pull requests whose latest gate observation (within 30 minutes) waits on each blocker |
+| `ai_sdlc_merge_unresolved_review_threads` | gauge | none | Known unresolved review threads on those pull requests |
 | `ai_sdlc_quarantined` | gauge | `journal` | Whether an uncertain effect quarantines the release manager's publication or merge journal, sampled each poll |
 
 ### Queue depth
@@ -199,19 +199,27 @@ increase(ai_sdlc_merge_attempts_exhausted_total[1h]) > 0
 
 ### Merge waits
 
-Each merge poll that selects a published pull request whose gate is not ready
-sets `ai_sdlc_merge_waiting{reason}` to 1 for every
-[gate reason](merge-controller.md#waiting-for-the-gate) present and 0 for the
-others: `native-protection-insufficient`, `checks-not-passed`,
+The release manager keeps, for each published pull request it observes, the
+latest [gate wait](merge-controller.md#waiting-for-the-gate). After every merge
+poll, `ai_sdlc_merge_waiting{reason}` counts the pull requests whose latest
+wait, observed within the last 30 minutes, holds each reason
+(`native-protection-insufficient`, `checks-not-passed`,
 `review-changes-requested`, `review-threads-unresolved` and
-`native-merge-not-ready`. `ai_sdlc_merge_unresolved_review_threads` holds the
-pull request's unresolved review thread count. A poll that finds no waiting
-pull request sets every series to 0; a poll that stopped, or could not run
-because the merge credential or runtime is unavailable, removes them. ai-sdlc cannot resolve review threads, so a
-pull request held only by them needs a person:
+`native-merge-not-ready`; 0 when none does).
+`ai_sdlc_merge_unresolved_review_threads` sums their known unresolved review
+thread counts. A pull request with more than 100 threads counts under
+`review-threads-unresolved` but adds no thread count.
+
+A pull request's wait ends when the gate next observes it ready, closed or
+merged. A poll that handles a queued request, a reconciliation or a stop, or
+observes another pull request, changes nothing, so the gauges do not drop
+while a pull request still waits. Unknown reasons are dropped, not recorded.
+When the merge loop cannot run because its credential or runtime is
+unavailable, the series are removed. ai-sdlc cannot resolve review threads, so
+a pull request held by them needs a person:
 
 ```promql
-min_over_time(ai_sdlc_merge_waiting{reason="review-threads-unresolved"}[30m]) == 1
+min_over_time(ai_sdlc_merge_waiting{reason="review-threads-unresolved"}[30m]) >= 1
 ```
 
 ### Quarantine

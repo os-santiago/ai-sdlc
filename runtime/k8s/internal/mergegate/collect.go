@@ -88,9 +88,14 @@ type Observation struct {
 	Ready           bool      `json:"ready"`
 	Reasons         []string  `json:"reasons"`
 	// UnresolvedThreads counts the pull request's unresolved review threads
-	// (at most 100; more fails closed). It is nonzero exactly when Reasons
-	// holds "review-threads-unresolved", so a ready gate omits it.
+	// (at most 100). It is nonzero when Reasons holds
+	// "review-threads-unresolved" and the count is known, so a ready gate
+	// omits it.
 	UnresolvedThreads int `json:"unresolvedThreads,omitempty"`
+	// UnresolvedThreadsUnknown is set with "review-threads-unresolved" when
+	// the pull request has more than 100 review threads: the gate cannot see
+	// them all, waits on them and reports no count (UnresolvedThreads 0).
+	UnresolvedThreadsUnknown bool `json:"unresolvedThreadsUnknown,omitempty"`
 }
 
 // The closed set of reasons an observation may carry. Each names one blocker.
@@ -203,7 +208,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 	if reviews.ChangesRequested {
 		reasons[ReasonChangesRequested] = true
 	}
-	if reviews.UnresolvedThreads > 0 {
+	if reviews.UnresolvedThreads > 0 || reviews.ThreadsTruncated {
 		reasons[ReasonThreadsUnresolved] = true
 	}
 	// A ready snapshot cannot silently retain checks or feedback which changed
@@ -237,6 +242,6 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		list = append(list, reason)
 	}
 	sort.Strings(list)
-	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list, UnresolvedThreads: reviews.UnresolvedThreads}, nil
+	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list, UnresolvedThreads: reviews.UnresolvedThreads, UnresolvedThreadsUnknown: reviews.ThreadsTruncated}, nil
 }
 func digest(v any) string { raw, _ := json.Marshal(v); return authority.Digest(raw) }

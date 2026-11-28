@@ -27,7 +27,15 @@ type Rotation struct {
 
 type rotationEntry struct {
 	observed, parkedUntil time.Time
+	// wait is the latest wait the gate reported for the publication, and
+	// waitAt when it was observed.
+	wait   *Wait
+	waitAt time.Time
 }
+
+// WaitMemory is how long a publication's latest wait counts in WaitSummary
+// without being observed again.
+const WaitMemory = 30 * time.Minute
 
 const rotationMemory = 24 * time.Hour
 
@@ -81,8 +89,10 @@ func (r *Rotation) snapshot() store.MergeRotation {
 }
 
 // observed records that a publication was just observed; park also keeps it
-// out of selection for that long.
-func (r *Rotation) observed(id string, park time.Duration) {
+// out of selection for that long. When gateObserved, wait replaces the
+// publication's latest wait (nil clears it); otherwise the previous wait is
+// kept.
+func (r *Rotation) observed(id string, park time.Duration, gateObserved bool, wait *Wait) {
 	if r == nil {
 		return
 	}
@@ -107,9 +117,47 @@ func (r *Rotation) observed(id string, park time.Duration) {
 		}
 		delete(r.entries, oldest)
 	}
-	e := rotationEntry{observed: now}
+	e := rotationEntry{observed: now, wait: r.entries[id].wait, waitAt: r.entries[id].waitAt}
 	if park > 0 {
 		e.parkedUntil = now.Add(park)
 	}
+	if gateObserved {
+		e.wait, e.waitAt = nil, time.Time{}
+		if wait != nil {
+			copied := *wait
+			copied.Reasons = append([]string{}, wait.Reasons...)
+			e.wait, e.waitAt = &copied, now
+		}
+	}
 	r.entries[id] = e
+}
+
+// WaitSummary counts the publications whose latest wait was observed within
+// WaitMemory: per gate reason, and their known unresolved review threads.
+// Polls that handle a queued request or a reconciliation change nothing, so
+// the counts do not drop while a publication still waits.
+type WaitSummary struct {
+	Reasons           map[string]int
+	UnresolvedThreads int
+}
+
+// Waits returns the current WaitSummary. A nil rotation has none.
+func (r *Rotation) Waits() WaitSummary {
+	out := WaitSummary{Reasons: map[string]int{}}
+	if r == nil {
+		return out
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.clock()
+	for _, e := range r.entries {
+		if e.wait == nil || now.Sub(e.waitAt) > WaitMemory {
+			continue
+		}
+		for _, reason := range e.wait.Reasons {
+			out.Reasons[reason]++
+		}
+		out.UnresolvedThreads += e.wait.UnresolvedThreads
+	}
+	return out
 }

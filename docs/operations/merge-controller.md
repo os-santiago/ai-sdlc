@@ -84,17 +84,14 @@ outside this set is dropped, and a gate with no known reason logs
 `ai_sdlc_merge_unresolved_review_threads` (see
 [metrics](metrics.md#merge-waits)).
 
+A pull request with more than 100 review threads cannot be fully observed: it
+waits in `merge-waiting-for-review-threads` with `unresolved_threads=unknown`.
+
 ai-sdlc cannot answer or resolve a review thread today. A third-party reviewer,
 for example CodeRabbit, that opens a thread on a published pull request
 therefore holds it in `merge-waiting-for-review-threads` until someone resolves
-the thread on the forge. Selection takes the oldest waiting publication first,
-so such a pull request also delays later merges until the thread is resolved
-or the issue is re-delivered (close the pull request, delete its branch and
-re-label the issue; see the
-[re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)).
-Closing the pull request alone does not release it: selection follows the
-issue generation, and the gate cannot observe a closed pull request, so each
-poll then stops with `merge-observation-unavailable`.
+the thread on the forge. Thanks to the [selection rotation](#selecting-a-publication),
+it no longer delays other publications' merges.
 
 ## Stopping before the send
 

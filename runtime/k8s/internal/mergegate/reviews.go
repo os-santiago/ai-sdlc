@@ -24,6 +24,10 @@ const threadQuery = `query($number:Int!,$owner:String!,$name:String!){repository
 type reviewState struct {
 	ChangesRequested  bool
 	UnresolvedThreads int
+	// ThreadsTruncated is set when the pull request has more review threads
+	// than one bounded page holds: their resolution cannot all be seen, so
+	// the gate waits on them with an unknown count.
+	ThreadsTruncated bool
 }
 
 func (c *Client) reviews(ctx context.Context, e Expected) (reviewState, string, error) {
@@ -109,7 +113,14 @@ func (c *Client) reviews(ctx context.Context, e Expected) (reviewState, string, 
 		return deny()
 	}
 	threads := p.Threads
-	if threads.Total == nil || *threads.Total < 0 || *threads.Total > 100 || threads.Page == nil || threads.Page.Next == nil || *threads.Page.Next || threads.Nodes == nil || len(threads.Nodes) != *threads.Total {
+	if threads.Total == nil || *threads.Total < 0 || threads.Page == nil || threads.Page.Next == nil || threads.Nodes == nil {
+		return deny()
+	}
+	// A complete page holds every thread; a truncated one holds exactly the
+	// first 100 of more than 100 and says so. Any other shape is refused.
+	complete := *threads.Total <= 100 && !*threads.Page.Next && len(threads.Nodes) == *threads.Total
+	truncated := *threads.Total > 100 && *threads.Page.Next && len(threads.Nodes) == 100
+	if !complete && !truncated {
 		return deny()
 	}
 	threadIDs := map[string]bool{}
@@ -121,6 +132,11 @@ func (c *Client) reviews(ctx context.Context, e Expected) (reviewState, string, 
 		if !*thread.Resolved {
 			state.UnresolvedThreads++
 		}
+	}
+	if truncated {
+		// The visible count is only a lower bound; report the threads as
+		// unresolved with an unknown count rather than a misleading one.
+		state.UnresolvedThreads, state.ThreadsTruncated = 0, true
 	}
 	return state, digest(struct {
 		Reviews []review
