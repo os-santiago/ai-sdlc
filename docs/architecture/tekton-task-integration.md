@@ -67,14 +67,15 @@ needs its own controls: refuse candidates that change `<extensions>`,
 `.mvn/` or plugin declarations, and run it under the `maven-build-test`
 restrictions (sandbox, no token) with egress only to the proxy.
 
-**Sandbox.** The adapter and the run tool can put `maven-build-test` under the
-`ai-sdlc-offline` gVisor RuntimeClass through the PipelineRun's per-task pod
-template. Fetch tasks never use it: that class has `network = "none"`. In the
-disposable cluster a plain four-container pod started under gVisor, but Tekton
-task pods failed to start their sub-containers ("creating root file system:
-input/output error"), so the sandbox is opt-in until that is resolved (stage
-2). The network-less NetworkPolicy, `mvn -o` and restricted Pod Security apply
-either way.
+**Sandbox.** `maven-build-test` runs under the `ai-sdlc-offline` gVisor
+RuntimeClass through the PipelineRun's per-task pod template; fetch tasks
+never use it, because that class sets `network = "none"`. Tekton task pods
+first failed under gVisor because systemd capped the sandbox's scope at 307
+tasks; the offline runtime installer now raises the node's `DefaultTasksMax`
+to 768 (measured peak 603), bounds every pod with a kubelet `podPidsLimit`
+of 768 and caps the CI namespace at two pods, admission requires the sandbox for build-test, and the
+sandboxed build passed 94/94 (stage 2a). The
+network-less policy, `mvn -o` and restricted Pod Security apply as well.
 
 **Proxy.** The `verification.dependencies` work provides an in-cluster Maven
 proxy (`dependency-proxy.ai-sdlc-dependencies`, cache on a PVC). Once merged,
@@ -177,7 +178,7 @@ accepts as `{context, appID}`; see the
    Validated against os-santiago/quarkus-super-heroes in a disposable kind
    cluster.
 2. Pre-generation wiring in the runtime (RBAC for the adapter identity,
-   results into reviewed context), gVisor compatibility for Tekton pods,
+   results into reviewed context), gVisor for Tekton pods (2a, in review),
    proxy-only egress once the proxy merges, `dependency-audit`.
 3. Generator tools: candidate diff transfer, `apply-candidate` step, tool
    schema in the model gateway, budgets.

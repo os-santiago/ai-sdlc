@@ -87,7 +87,7 @@ its history, so removal is a deliberate operator action
 | remote resolvers (`git`, `http`, `hub`, `bundles`, `cluster`) | disabled | No run can fetch an unreviewed definition. |
 | `enable-api-fields` | `stable` | No alpha or beta behavior. |
 | `disable-creds-init` | `true` | No credential initialization; the CI carries no credentials. |
-| `coschedule` | `pipelineruns` | One affinity assistant per run, which permits a task to bind both the source and cache claims. |
+| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims. Without an assistant, Tekton does not keep a run's pods on one node, so on a multi-node cluster the source and cache volumes must be reachable from any node (ReadWriteMany storage); node-local storage such as local-path works only on a single-node cluster like the local kind installation. |
 | `send-cloudevents-for-runs` | `false` | No event sink is configured. |
 
 ## The catalog
@@ -256,16 +256,81 @@ or node affinity; the local kind node is single-node.
 
 ### Sandbox
 
-`--sandbox` puts the `build-test` task under the `ai-sdlc-offline` RuntimeClass
-(gVisor, installed by `./install.sh sandbox`) through the PipelineRun's
-per-task pod template. Fetch tasks never use it, because that class sets
-`network = "none"`: an npm run under it failed with `EAI_AGAIN`. In the
-disposable cluster a plain four-container pod (Maven, PostgreSQL and MongoDB
-images, read-only roots) started and ran under gVisor, but Tekton task pods
-failed to start their sub-containers (`failed to setupFS: creating mount
-namespace: creating root file system: input/output error`). The sandbox is
-therefore opt-in until that is understood; the network-less policy, `mvn -o`
-and restricted Pod Security apply either way.
+`maven-build-test`, the only task that runs candidate code, runs under the
+`ai-sdlc-offline` RuntimeClass (gVisor, `network = "none"`) through the
+PipelineRun's per-task pod template. Install it with `./install.sh sandbox`;
+admission refuses a `maven-build-test` run whose `build-test` task does not
+request it, and the run tool also checks that the node's per-scope task limit
+was raised (otherwise: re-run `./install.sh sandbox`). Fetch tasks never use it: the class has no network, so an
+npm run under it failed with `EAI_AGAIN`.
+
+**Node task limit.** gVisor runs every container of a pod (sandbox, gofers and
+systrap stubs) inside the systemd scope of the pod's first container, and
+systemd caps each container scope at `DefaultTasksMax`, 15% of the node's pid
+limit: 307 for a kind node under podman's default of 2048. A Tekton task pod
+has two init containers plus one container per step and sidecar; with three or
+more, the sandbox died with `failed to create new OS thread (have 57 already;
+errno=11)` and the kubelet reported `creating root file system: input/output
+error` or `the sandbox exited before the container started`. One- and
+two-step tasks, emptyDir volumes and PVC workspaces all worked, which is how the
+cause was isolated (runsc debug logs showed the panic).
+
+`./install.sh sandbox` (and every `./install.sh local` that installs the
+offline runtime) now sets two node limits:
+
+- **Per-scope tasks:** a reviewed systemd drop-in
+  (`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
+  `DefaultTasksMax=768`) sized from the measured peak of a sandboxed Maven
+  build-test (603 tasks) plus a 27% margin. It re-executes the node's systemd
+  manager, verifies the value and records `scopeTasksMax` in its report. It
+  only ever raises the default: a node without a pid limit (docker) keeps its
+  larger default and gets no drop-in. It refuses a node whose pid limit is
+  below twice the value, and a drop-in that ai-sdlc did not write. **It applies
+  to every container scope created afterwards, sandboxed or not.**
+- **Per-pod pids:** the kubelet `podPidsLimit` (768, `kubelet-pods.json`), in
+  `deploy/local/kind.yaml` for new clusters and added to an existing node's
+  kubelet configuration atomically: the installer stages the file, checks it is
+  the original plus the reviewed value, moves it into place, restarts the
+  kubelet and confirms the value through the node's `/configz`; on failure it
+  restores the original and restarts the kubelet again. Pods created before
+  the change keep running without the bound until they are recreated. A value
+  that an earlier ai-sdlc revision set (marked, or listed under `previous`,
+  such as the earlier 1024 in kind.yaml) is upgraded; any other is refused.
+- **CI concurrency:** candidate code runs only in `build-test` pods, which
+  admission requires to carry the `ai-sdlc-ci-candidate` PriorityClass (value
+  0, never preempts). Two ResourceQuotas scoped by that class allow one
+  candidate pod and one other (fetch) pod at a time; Tekton retries a task pod
+  refused by a quota until a pod ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
+  with it, each run held an assistant pod, and two concurrent runs took the
+  whole quota while their task pods stayed pending, a deadlock observed in the
+  disposable cluster. Tekton does not remove assistants that an earlier
+  configuration started once the mode changes, so the installer deletes
+  affinity-assistant StatefulSets whose PipelineRun is finished or gone
+  (`releasedAssistants` in its report) and keeps those of runs still in
+  progress.
+
+The arithmetic for a podman kind node (2,048 pids), with the node's own
+baseline measured on the existing kind nodes (about 560 pids idle, a peak near
+1,100): baseline peak 1,100 + one candidate pod at its 768 limit + one fetch
+pod (trusted inputs; a Maven pod with tests peaked at 146, so about 150) =
+about 2,018. The sandboxed build-test peaked at 603, so it fits its 768 limit,
+and a fork bomb in the candidate pod stops at 768 while fetch pods run only
+reviewed or scriptless code. The kubelet edit also recovers when an earlier
+run moved the file but stopped before the restart: a value present in the file
+but not reported by `/configz` triggers a restart and a second check.
+
+Changing the value: edit the reviewed files and re-run `./install.sh
+sandbox`; the installer replaces its own earlier drop-in and kubelet line.
+Upgrading from an install without them works the same way, and until then the
+run tool refuses sandboxed runs with "re-run ./install.sh sandbox". Removal:
+delete `/etc/systemd/system.conf.d/ai-sdlc-offline-tasks.conf` on the node and
+run `systemctl daemon-reexec`, and remove the marked `podPidsLimit` lines from
+`/var/lib/kubelet/config.yaml` and restart the kubelet; sandboxed Tekton pods
+then fail again.
+
+Measured: `maven-build-test` rest-villains with the PostgreSQL sidecar under
+gVisor passed 94/94 (72 unit, 22 integration) in 2 min 1 s of Maven, against
+1 min 42 s with the default runtime.
 
 ### Maven proxy
 
