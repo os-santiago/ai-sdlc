@@ -1,12 +1,17 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/tektontasks"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // toolSession is the part of the executor session that carries generator tool
@@ -97,4 +102,58 @@ func toolPayload(text string) []byte {
 			return raw
 		}
 	}
+}
+
+// CIRuntimeClass is the sandbox class the CI namespace's admission requires
+// for build-test, the only catalog task that runs candidate code.
+const CIRuntimeClass = "ai-sdlc-offline"
+
+// toolPoll is how often a running tool's PipelineRun is observed.
+const toolPoll = 10 * time.Second
+
+// generatorTools returns the drive loop's tool hook for a generation, or nil
+// when the generation offers no tools (the profile has no tool budget or the
+// assignment's manifest declares none). The manifest is the one the current
+// policy binds, and its tool spec must be exactly the assignment's: a reload
+// that changed the declared tools refuses rather than runs other tools.
+func generatorTools(ctx context.Context, prepared Prepared, load LifecycleLoader, session toolSession, cluster func() (tektontasks.Cluster, error), journal tektontasks.ToolJournal) (func(context.Context) error, error) {
+	assignmentRaw := prepared.Assignment()
+	a, err := executor.ParseAssignment(assignmentRaw, workspacebundle.Digest(assignmentRaw), time.Now())
+	if err != nil {
+		return nil, ErrAuthority
+	}
+	p, err := executor.ParseProfile(prepared.Profile(), a.ProfileSHA256)
+	if err != nil {
+		return nil, ErrAuthority
+	}
+	if !executor.ToolsEnabled(p, a.Tools) {
+		return nil, nil
+	}
+	inputs, _, err := load(ctx)
+	if err != nil {
+		return nil, ErrAuthority
+	}
+	m, ok := project.BoundOrNone(a.Repository, inputs.Policy.ProjectSHA256)
+	declared, _ := json.Marshal(ToolSpecOf(m))
+	assigned, _ := json.Marshal(a.Tools)
+	if !ok || !bytes.Equal(declared, assigned) {
+		return nil, ErrAuthority
+	}
+	if journal == nil {
+		return nil, ErrAuthority
+	}
+	c, err := cluster()
+	if err != nil {
+		return nil, err
+	}
+	budget := &tektontasks.ToolBudget{MaxCalls: p.Tools.Calls, MaxSeconds: p.MaxSeconds}
+	// Answer inside the mailbox's own window, so the generator receives a
+	// bounded failure rather than a bare timeout.
+	window := time.Duration(p.Tools.Seconds)*time.Second - 10*time.Second
+	dispatch := &toolDispatch{session: session, run: func(ctx context.Context, call tektontasks.ToolCall) (tektontasks.ToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, window)
+		defer cancel()
+		return tektontasks.InvokeTool(ctx, c, journal, budget, m, call, a.SourceSHA, CIRuntimeClass, toolPoll)
+	}}
+	return dispatch.poll, nil
 }
