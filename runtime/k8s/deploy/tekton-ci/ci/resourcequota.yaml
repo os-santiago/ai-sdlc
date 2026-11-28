@@ -8,11 +8,11 @@
 #   one verification run           3 x 768 (candidate or verification profile)
 #   each candidate-code pod         768 (kubelet podPidsLimit; sandboxed
 #                                        build-test measured at 603)
-#   each fetch pod                 ~150 (trusted inputs only: checkout,
+#   each fetch pod                  768 (counted at its podPidsLimit bound;
+#                                        trusted inputs only: checkout,
 #                                        maven-dependencies on the base head,
-#                                        npm with scripts disabled; a Maven
-#                                        pod with tests measured at 146)
-#   defaults                       ~4322 of the installer's 8192 node limit
+#                                        npm with scripts disabled)
+#   defaults                        4940 of the installer's 8192 node limit
 #
 # Candidate code runs only in build-test pods, which carry the
 # ai-sdlc-ci-candidate PriorityClass (admission requires it). Every other CI

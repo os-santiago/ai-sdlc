@@ -315,7 +315,8 @@ offline runtime) now sets two node limits:
   progress.
 
 The installer now sets the node container's pid limit (8,192 by default) and
-checks this budget for the configured quotas; see
+checks a budget that counts every CI pod, fetch pods included, at its
+768-pid bound; see
 [kind node resources](kind-node-resources.md). The original arithmetic for a
 podman kind node (2,048 pids), with the node's own
 baseline measured on the existing kind nodes (about 560 pids idle, a peak near

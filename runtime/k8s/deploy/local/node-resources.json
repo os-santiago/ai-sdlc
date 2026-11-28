@@ -8,7 +8,6 @@
   },
   "pidBudget": {
     "nodeBaseline": 1100,
-    "fetchPod": 150,
     "concurrentSandboxPods": 3
   }
 }

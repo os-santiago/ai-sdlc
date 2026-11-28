@@ -515,7 +515,7 @@ def _main(argv, stack):
     parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
     parser.add_argument('--tekton-ci-candidate-pods', type=int, help='Tekton CI candidate-code (build-test) pods that may run at once (1-32, default 1); checked against the node pid budget')
     parser.add_argument('--tekton-ci-fetch-pods', type=int, help='Tekton CI fetch pods that may run at once (1-32, default 1); checked against the node pid budget')
-    parser.add_argument('--node-pids-limit', type=int, help='Pid limit of each kind node container (default 8192, or a quarter of the host pid_max when smaller); kind only (docs/operations/kind-node-resources.md)')
+    parser.add_argument('--node-pids-limit', type=int, help='Pid limit of each kind node container (default 8192, or a quarter of the host pid_max or threads-max when smaller; without the option a larger limit already set is kept); kind only (docs/operations/kind-node-resources.md)')
     parser.add_argument('--node-memory', help='Optional memory cap of each kind node container, for example 12g; off by default; kind only')
     parser.add_argument('--node-cpus', help='Optional CPU cap of each kind node container, for example 8 or 6.5; off by default; kind only')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')

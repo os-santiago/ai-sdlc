@@ -37,7 +37,7 @@ def policy():
     pids, budget = value.get('pidsLimit', {}), value.get('pidBudget', {})
     if (value.get('version') != 1 or set(value) != {'version', 'pidsLimit', 'pidBudget'}
             or set(pids) != {'default', 'hostShare', 'minimum', 'maximum'}
-            or set(budget) != {'nodeBaseline', 'fetchPod', 'concurrentSandboxPods'}
+            or set(budget) != {'nodeBaseline', 'concurrentSandboxPods'}
             or any(type(v) is not int or v < 1 for v in list(pids.values()) + list(budget.values()))
             or not pids['minimum'] <= pids['default'] <= pids['maximum']):
         raise ValueError('Unsupported kind node resource policy')
@@ -56,20 +56,29 @@ def host_pid_max(path=Path('/proc/sys/kernel/pid_max')):
     return int(path.read_text().strip())
 
 
-def desired(pids_limit=None, memory=None, cpus=None, pid_max=None, cpu_count=None):
+def host_threads_max(path=Path('/proc/sys/kernel/threads-max')):
+    return int(path.read_text().strip())
+
+
+def desired(pids_limit=None, memory=None, cpus=None, pid_max=None, cpu_count=None, threads_max=None):
     """Validated node resources. pids_limit defaults to the policy default,
-    reduced to a quarter of the host's pid_max on hosts with few pids; memory
-    (for example 8g or 6144m) and cpus (for example 4 or 2.5) stay unset
-    unless requested."""
+    reduced to a quarter of the host's pid_max (or threads-max) on hosts with
+    few; an explicit value may reach half of either. memory (for example 8g
+    or 6144m) and cpus (for example 4 or 2.5) stay unset unless requested.
+    pidsLimitExplicit records whether the operator chose the pid limit: a
+    default never lowers a larger limit already on the node."""
     limits = policy()['pidsLimit']
     pid_max = host_pid_max() if pid_max is None else pid_max
-    ceiling = min(limits['maximum'], pid_max // 2)
+    threads_max = host_threads_max() if threads_max is None else threads_max
+    host = min(pid_max, threads_max)
+    ceiling = min(limits['maximum'], host // 2)
+    explicit = pids_limit is not None
     if pids_limit is None:
-        pids_limit = min(limits['default'], pid_max // limits['hostShare'])
+        pids_limit = min(limits['default'], host // limits['hostShare'])
     if type(pids_limit) is not int or not limits['minimum'] <= pids_limit <= ceiling:
-        raise ValueError('The node pid limit must be an integer from %d to %d (half of the host pid_max)'
+        raise ValueError('The node pid limit must be an integer from %d to %d (half of the host pid_max and threads-max)'
                          % (limits['minimum'], ceiling))
-    result = {'pidsLimit': pids_limit, 'memory': None, 'cpus': None}
+    result = {'pidsLimit': pids_limit, 'pidsLimitExplicit': explicit, 'memory': None, 'cpus': None}
     if memory is not None:
         match = MEMORY.fullmatch(str(memory))
         if not match:
@@ -93,29 +102,26 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0):
     The load is the node baseline (system pods, the runtime and its database,
     measured at ~1100 pids at peak), one verification run when sandboxed
     execution is installed (three concurrent pods: baseline, cross and
-    candidate), every Tekton candidate pod the quota admits and every fetch
-    pod. Each sandboxed or candidate pod counts at the kubelet podPidsLimit,
-    which bounds it; fetch pods run trusted inputs and count at their measured
-    size. No single pod or systemd scope can exceed its own bound, so a
-    runaway pod cannot exhaust the node either way. The fetch term is a
-    measurement (146 for a Maven pod with tests), not a limit: only the
-    podPidsLimit caps a fetch pod, so the budget assumes fetch pods stay near
-    their measured size, which their reviewed, scriptless inputs make likely.
+    candidate), and every Tekton candidate and fetch pod the quotas admit.
+    Every pod counts at the kubelet podPidsLimit, the bound that actually
+    caps it, so the budget holds even when every pod reaches its bound and
+    relies on no measurement of what a pod usually uses.
     """
     budget = policy()['pidBudget']
     pod = sandbox_pod_pids()
     if type(candidate_pods) is not int or type(fetch_pods) is not int or candidate_pods < 0 or fetch_pods < 0:
         raise ValueError('Pod quotas must be non-negative integers')
     sandbox_pods = budget['concurrentSandboxPods'] if sandbox else 0
-    required = budget['nodeBaseline'] + (sandbox_pods + candidate_pods) * pod + fetch_pods * budget['fetchPod']
+    required = budget['nodeBaseline'] + (sandbox_pods + candidate_pods + fetch_pods) * pod
     report = {'nodePidsLimit': limit, 'nodeBaseline': budget['nodeBaseline'], 'podPidsLimit': pod,
               'sandboxPods': sandbox_pods, 'candidatePods': candidate_pods, 'fetchPods': fetch_pods,
-              'fetchPodPids': budget['fetchPod'], 'required': required}
+              'required': required}
     if limit is not None and required > limit:
-        raise ValueError('The node pid limit %d cannot hold its expected load of %d pids (baseline %d, %d sandboxed '
-                         'and %d candidate pods at %d, %d fetch pods at %d); raise --node-pids-limit or lower the '
-                         'Tekton CI pod quotas' % (limit, required, budget['nodeBaseline'], sandbox_pods,
-                                                    candidate_pods, pod, fetch_pods, budget['fetchPod']))
+        raise ValueError('The node pid limit %d cannot hold its expected load of %d pids (baseline %d, plus %d sandboxed, '
+                         '%d candidate and %d fetch pods at their %d-pid bound); raise --node-pids-limit or lower the '
+                         'Tekton CI pod quotas. The budget also covers the quotas already installed, so lowering both '
+                         'the quotas and the limit takes two runs: first the quotas, then the limit'
+                         % (limit, required, budget['nodeBaseline'], sandbox_pods, candidate_pods, fetch_pods, pod))
     return report
 
 
@@ -139,29 +145,40 @@ def _cgroup(run, provider, node, name):
     return _command(run, [provider, 'exec', node, 'cat', '/sys/fs/cgroup/' + name]).stdout.strip()
 
 
+HEADROOM = 1.1
+
+
 def apply(run, provider, cluster, node, want):
     """Set the node container's limits, idempotently, and verify them.
 
     Only a container labelled as a node of this kind cluster is changed. The
-    pid limit is always reconciled to the desired value; it is lowered only
-    when the node currently uses fewer pids. Memory and CPU caps are set when
-    requested and left as they are otherwise.
+    pid limit is reconciled to the desired value, except that a default (no
+    --node-pids-limit) never lowers a larger limit already set, like omitted
+    memory and CPU caps, which are left as they are. Lowering a pid limit or
+    memory cap requires the node's current use plus 10% to fit below it. A
+    stored value whose live cgroup differs (drift) is applied again.
     """
     current = inspect(run, provider, node)
     if current['cluster'] != cluster:
         raise ValueError('Kind node container ownership mismatch: ' + node)
+    target = want['pidsLimit']
+    if not want.get('pidsLimitExplicit', True) and current['pidsLimit'] is not None and current['pidsLimit'] > target:
+        target = current['pidsLimit']
     args = []
-    if current['pidsLimit'] != want['pidsLimit']:
-        if current['pidsLimit'] is None or current['pidsLimit'] > want['pidsLimit']:
+    live = _cgroup(run, provider, node, 'pids.max')
+    if current['pidsLimit'] != target or live != str(target):
+        if current['pidsLimit'] is None or current['pidsLimit'] > target or live == 'max' or (live.isdigit() and int(live) > target):
             used = int(_cgroup(run, provider, node, 'pids.current'))
-            if used >= want['pidsLimit']:
-                raise ValueError('Node %s runs %d pids; refusing to lower its pid limit to %d' % (node, used, want['pidsLimit']))
-        args += ['--pids-limit', str(want['pidsLimit'])]
+            if used * HEADROOM >= target:
+                raise ValueError('Node %s runs %d pids; refusing to lower its pid limit to %d without 10%% headroom'
+                                 % (node, used, target))
+        args += ['--pids-limit', str(target)]
     if want.get('memory') and current['memory'] != want['memory']:
         if current['memory'] is None or current['memory'] > want['memory']:
             used = int(_cgroup(run, provider, node, 'memory.current'))
-            if used >= want['memory']:
-                raise ValueError('Node %s uses %d bytes of memory; refusing to cap it at %d' % (node, used, want['memory']))
+            if used * HEADROOM >= want['memory']:
+                raise ValueError('Node %s uses %d bytes of memory; refusing to cap it at %d without 10%% headroom'
+                                 % (node, used, want['memory']))
         # A hard cap: memory plus swap equal to memory, so the node cannot swap past it.
         args += ['--memory', str(want['memory']), '--memory-swap', str(want['memory'])]
     if want.get('cpus') and current['cpus'] != want['cpus']:
@@ -170,7 +187,7 @@ def apply(run, provider, cluster, node, want):
         _command(run, [provider, 'update', *args, node], check=True)
     observed = inspect(run, provider, node)
     cgroup = _cgroup(run, provider, node, 'pids.max')
-    if (observed['pidsLimit'] != want['pidsLimit'] or cgroup != str(want['pidsLimit'])
+    if (observed['pidsLimit'] != target or cgroup != str(target)
             or (want.get('memory') and observed['memory'] != want['memory'])
             or (want.get('cpus') and observed['cpus'] != want['cpus'])):
         raise ValueError('The node container %s did not apply its resource limits' % node)
@@ -189,8 +206,15 @@ def validate_options(args):
     return None
 
 
-def apply_cluster(run, provider, cluster, kind, env, want):
+def require_cgroup_v2(root=Path('/sys/fs/cgroup')):
+    """The pid, memory and CPU limits are verified through cgroup v2 files."""
+    if not (root / 'cgroup.controllers').exists():
+        raise ValueError('kind node resource limits need a cgroup v2 host; this host uses cgroup v1')
+
+
+def apply_cluster(run, provider, cluster, kind, env, want, cgroup_root=Path('/sys/fs/cgroup')):
     """Apply the node resources to every node of the cluster."""
+    require_cgroup_v2(cgroup_root)
     nodes = _command(run, [kind, 'get', 'nodes', '--name', cluster], env=env, check=True).stdout.split()
     if not nodes:
         raise ValueError('The kind cluster has no nodes')

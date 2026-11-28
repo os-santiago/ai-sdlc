@@ -20,10 +20,13 @@ it creates the cluster and reconciles them on every later run.
 `./install.sh local` records the observed values per node under
 `nodeResources`.
 
-The pid limit is always reconciled to the requested value, or to the default
-when the option is omitted. It is lowered only while the node runs fewer pids
-than the new limit. Memory and CPU caps are set when requested and left as
-they are otherwise. A memory cap below what the node already uses is refused.
+The pid limit is reconciled to `--node-pids-limit` when given. Without the
+option it is raised to the default when lower (or unlimited), and a larger
+limit set earlier is kept, like the memory and CPU caps, which are set when
+requested and left as they are otherwise. Lowering a pid limit or memory cap
+requires the node's current use plus 10% to fit below the new value. A stored
+limit whose live cgroup differs is applied again. The limits need a cgroup v2
+host; a cgroup v1 host is refused before any change.
 `podman update` cannot remove a cap (`--memory 0` and `--cpus 0` leave it in
 place), so to lift one either pass a larger value (up to the host's memory or
 CPU count) or recreate the cluster.
@@ -70,23 +73,22 @@ for 2,048:
   node baseline (1,100 at peak, measured)
   + one verification run (3 pods x 768) when the profile is candidate or verification
   + Tekton CI candidate pods x 768
-  + Tekton CI fetch pods x 150 (measured peak 146)
+  + Tekton CI fetch pods x 768
   ```
 
-  At the default of 8,192 that is 1,100 + 2,304 + 768 + 150 = 4,322, so the
-  candidate quota can rise to 6 with one fetch pod. At podman's 2,048 the
-  verification profile is refused, which is issue #859.
+  Every pod counts at the `podPidsLimit` that actually bounds it, not at a
+  measured typical size. At the default of 8,192 that is 1,100 + 2,304 + 768 +
+  768 = 4,940, so the candidate quota can rise to 5 with one fetch pod. At
+  podman's 2,048 the verification profile is refused, which is issue #859.
 
 The installer checks this budget against both the quotas already in the
 cluster and the requested ones, so it holds before, during and after a
 reconciliation, and when a later run omits `--tekton-ci` (which keeps Tekton
 and its quotas). `./install.sh sandbox` counts the verification run too.
+Because the installed quotas count, lowering both the quotas and the limit
+takes two runs: first the quotas, then the limit.
 
 No single pod can exceed its `podPidsLimit` and no scope its
 `DefaultTasksMax`, both well below the node limit, so one runaway pod cannot
-exhaust the node. The fetch term is a measurement, not a limit: only the
-`podPidsLimit` caps a fetch pod. The budget assumes fetch pods stay near their
-measured peak (146), which their reviewed, scriptless inputs make likely. Six
-candidate pods, one verification run and one fetch pod that grew to 768 would
-need 8,780 pids, more than 8,192, so re-measure before making a fetch task run
-unreviewed code (see [Tekton CI](tekton-ci.md#sandbox)).
+exhaust the node, and since the budget counts every admitted pod at that
+bound, all of them together cannot either.
